@@ -95,5 +95,5 @@ close_sockets:
 close_server_socket:
     close(server_socket);
 
-    return -;
+    return -1;
 }
