@@ -10,16 +10,72 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <pthread.h>
 
 #define BACK_LOG 10
 #define BUFFER_CHUNK 1024
 #define SERVER_PORT 8089
+#define MAX_THREADS 20
 
 #define LOG_ERROR(message) \
     printf("%s\n%s\n\n", message, strerror(errno))
 
 fd_set* sockets;
 int server;
+
+enum event_type
+{
+    read_event,
+    write_event
+};
+
+typedef void (*read_cb)(int client_socket, void* args);
+typedef void (*write_cb)(int client_socket, void* args);
+typedef void (*timeout_cb)(int client_socket, void* args);
+
+struct socket_event
+{
+    enum event_type type;
+
+    int socket;
+
+    int state;
+
+    read_cb read_fun;
+    write_cb write_fun;
+    timeout_cb timeout_fun;
+
+    void* args;
+};
+
+void* handle_client(void* args)
+{
+    int client = *((int *)args);
+    client = client;
+    free(args);
+    return NULL;
+}
+
+int init_poll(pthread_t *threads, int* queue_of_ready_clients)
+{
+    int i;
+    for(i = 0; i < MAX_THREADS; i++)
+    {
+        if(pthread_create(&threads[i], NULL, handle_client, queue_of_ready_clients) == -1)
+            break;
+    }
+
+    if(i != MAX_THREADS)
+    {
+        for(int j = 0; j < i; j++)
+        {
+            pthread_exit(&threads[j]);
+        }
+        return -1;
+    }
+
+    return 0;
+}
 
 void signal_handler(int sign_nr)
 {
