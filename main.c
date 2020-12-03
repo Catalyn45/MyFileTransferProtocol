@@ -11,6 +11,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <pthread.h>
+#include <sys/queue.h>
+#include "myVector.h"
 
 #define BACK_LOG 10
 #define BUFFER_CHUNK 1024
@@ -19,6 +21,9 @@
 
 #define LOG_ERROR(message) \
     printf("%s\n%s\n\n", message, strerror(errno))
+
+#define EVENT_FUN(fun_name) \
+    void fun_name(int client_socket, void* args)
 
 fd_set* sockets;
 int server;
@@ -29,9 +34,20 @@ enum event_type
     write_event
 };
 
-typedef void (*read_cb)(int client_socket, void* args);
-typedef void (*write_cb)(int client_socket, void* args);
-typedef void (*timeout_cb)(int client_socket, void* args);
+typedef void (*socket_event_cb)(int client_socket, void* args);
+
+
+EVENT_FUN(socket_read)
+{
+
+}
+
+EVENT_FUN(socket_write)
+{
+
+}
+
+static void socket_write
 
 struct socket_event
 {
@@ -41,11 +57,17 @@ struct socket_event
 
     int state;
 
-    read_cb read_fun;
-    write_cb write_fun;
-    timeout_cb timeout_fun;
+    socket_event_cb read_fun;
+    socket_event_cb write_fun;
+    socket_event_cb timeout_fun;
 
     void* args;
+};
+
+struct entry
+{
+	struct socket_event data;
+	STAILQ_ENTRY(entry) entries;
 };
 
 void* handle_client(void* args)
@@ -56,7 +78,7 @@ void* handle_client(void* args)
     return NULL;
 }
 
-int init_poll(pthread_t *threads, int* queue_of_ready_clients)
+int init_poll(pthread_t *threads, struct events_head* queue_of_ready_clients)
 {
     int i;
     for(i = 0; i < MAX_THREADS; i++)
@@ -104,6 +126,8 @@ void signal_handler(int sign_nr)
         exit(0);
 	}
 }
+
+pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char* argv[])
 {
@@ -166,11 +190,22 @@ int main(int argc, char* argv[])
 
     FD_SET(server_socket, &current_set);
 
+    STAILQ_HEAD(events_head, entry);
+
+    struct events_head events;
+
+    STAILQ_INIT(&events);
+
+    pthread_t threads[MAX_THREADS];
+
+    init_poll(&threads, &events);
+
     while(1)
     {
-        copy_set = current_set;
-    
-        if(select(FD_SETSIZE, &copy_set, NULL, NULL, NULL) == -1)
+        read_set = current_set;
+    	write_set = current_set;
+
+        if(select(FD_SETSIZE, &read_set, &write_set, NULL, NULL) == -1)
         {
             LOG_ERROR("Eroare la select");
             goto close_sockets;
@@ -178,7 +213,7 @@ int main(int argc, char* argv[])
 
         for(int i = 0; i < FD_SETSIZE; i++)
         {
-            if(FD_ISSET(i, &copy_set))
+            if(FD_ISSET(i, &read_set))
             {
                 if(i == server_socket)
                 {
@@ -186,6 +221,7 @@ int main(int argc, char* argv[])
                     socklen_t size = sizeof(client_adress);
 
                     int client = accept(i, (struct sockaddr*)&client_adress, &size);
+
                     FD_SET(client, &current_set);
 
                     printf(
@@ -196,36 +232,23 @@ int main(int argc, char* argv[])
                 }
                 else
                 {
-                    char buffer[BUFFER_CHUNK];
+                	struct entry client_event* = malloc(sizeof(struct entry));
+                	client_event->data.type = read_event;
+                	pthread_mutex_lock(&mutex);
+                	STAILQ_INSERT_TAIL(&events, client_event, entries);
+                	pthread_mutex_unlock(&mutex);
 
-                    int result = recv(i, buffer, BUFFER_CHUNK - 1, 0);
-
-                    if(result <= 0)
-                    {
-                        struct sockaddr_in client_adress;
-                        socklen_t size = sizeof(client_adress);
-
-                        getpeername(i, (struct sockaddr*)&client_adress, &size);
-
-                        printf(
-                            "client disconnected from server ip: %s port %d\n", 
-                            inet_ntoa(client_adress.sin_addr),
-                            ntohs(client_adress.sin_port)
-                        );
-
-                        printf("conn closed\n");
-                        fflush(stdout);
-                        close(i);
-                        FD_CLR(i, &current_set);
-                    }
-                    else
-                    {
-                        buffer[result] = '\0';
-                        printf("%s", buffer);
-                        fflush(stdout);
-                    }
                 }
             }
+            else if (FD_ISSET(i, &write_set))
+            {
+	    	    struct entry client_event* = malloc(sizeof(struct entry));
+				client_event->data.type = write_event;
+	        	pthread_mutex_lock(&mutex);
+	        	STAILQ_INSERT_TAIL(&events, client_event, entries);
+	        	pthread_mutex_unlock(&mutex);
+            }
+
         }
     }
 
