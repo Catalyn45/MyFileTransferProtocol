@@ -12,7 +12,6 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/queue.h>
-#include "myVector.h"
 
 #define BACK_LOG 10
 #define BUFFER_CHUNK 1024
@@ -22,68 +21,185 @@
 #define LOG_ERROR(message) \
     printf("%s\n%s\n\n", message, strerror(errno))
 
-#define EVENT_FUN(fun_name) \
-    void fun_name(int client_socket, void* args)
-
-fd_set* sockets;
 int server;
 
-enum event_type
+struct client_info
 {
-    read_event,
-    write_event
-};
-
-typedef void (*socket_event_cb)(int client_socket, void* args);
-
-
-EVENT_FUN(socket_read)
-{
-
-}
-
-EVENT_FUN(socket_write)
-{
-
-}
-
-static void socket_write
-
-struct socket_event
-{
-    enum event_type type;
-
-    int socket;
-
-    int state;
-
-    socket_event_cb read_fun;
-    socket_event_cb write_fun;
-    socket_event_cb timeout_fun;
-
-    void* args;
+	int socket;
+	char name[20];
+	int command;
+	int state;
 };
 
 struct entry
 {
-	struct socket_event data;
-	STAILQ_ENTRY(entry) entries;
+	struct client_info data;
+	SLIST_ENTRY(entry) entries;
 };
+
+SLIST_HEAD(slisthead, entry);
+
+void delete_socket(struct slisthead* clients, int socket)
+{
+	struct entry* it;
+
+	SLIST_FOREACH(it, clients, entries)
+	{
+		if(it->data.socket == socket)
+		{
+			SLIST_REMOVE(clients, it, entry, entries);
+			close(it->data.socket);
+			free(it);
+			return;
+		}
+	}
+}
+
+void insert_client(struct slisthead* clients, struct entry client)
+{
+	struct entry* client_info = malloc(sizeof(struct entry));
+	memcpy(client_info, &client, sizeof(struct entry));
+	SLIST_INSERT_HEAD(clients, client_info, entries);
+}
+
+struct entry* get_element(struct slisthead* clients, int socket)
+{
+	struct entry* it;
+
+	SLIST_FOREACH(it, clients, entries)
+	{
+		if(it->data.socket == socket)
+		{
+			return it;
+		}
+	}
+
+	return NULL;
+}
+
+void socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd, fd_set* write_fd)
+{
+	char buffer[BUFFER_CHUNK];
+	int len = recv(client_socket, buffer, BUFFER_CHUNK - 1, 0);
+
+	if(len <= 0)
+	{
+		FD_CLR(client_socket, master_fd);
+		delete_socket(clients, client_socket);
+		printf("Client disconnected\n");
+	}
+	else
+	{
+		buffer[len] = '\0';
+		if(strstr(buffer, "vreau"))
+		{
+			FD_SET(client_socket, write_fd);
+		}
+		else
+			printf("%s\n", buffer);
+	}
+}
+
+void socket_write(int client_socket, fd_set* write_fd)
+{
+	const char* msg = "Ti-am trimis mesaj inapoi";
+	send(client_socket, msg, strlen(msg), 0);
+	FD_CLR(client_socket, write_fd);
+}
 
 void* handle_client(void* args)
 {
-    int client = *((int *)args);
-    client = client;
+    int main_thread_socket = *((int *)args);
     free(args);
+
+    struct slisthead clients;
+    SLIST_INIT(&clients);
+    fd_set master_fd, read_fd, write_fd;
+ 
+    FD_ZERO(&master_fd);
+    FD_ZERO(&write_fd);
+
+    FD_SET(main_thread_socket, &master_fd);
+
+    while(1)
+    {
+    	read_fd = master_fd;
+
+    	select(FD_SETSIZE, &read_fd, &write_fd, NULL, NULL);
+
+    	printf("trec prin while\n");
+
+    	for(int i = 0; i < FD_SETSIZE; i++)
+    	{
+    		if(FD_ISSET(i, &read_fd))
+    		{
+    			if(i == main_thread_socket)
+    			{
+    				printf("Client connected\n");
+    				fflush(stdout);
+
+    				int socket_to_add = 0;
+    				recv(i, &socket_to_add, sizeof(int), 0);
+
+    				FD_SET(socket_to_add, &master_fd);
+
+    				struct entry client;
+    				memset(&client, 0, sizeof(client));
+    				client.data.socket = i;
+    				
+    				insert_client(&clients, client);
+    			}
+    			else
+    			{
+    				socket_read(i, &clients, &master_fd, &write_fd);
+    			}
+    		}
+    		else if(FD_ISSET(i, &write_fd))
+    		{
+    			printf("trimit un mesaaaaj\n");
+    			fflush(stdout);
+    			socket_write(i, &write_fd);
+    		}
+    	}
+
+    }
     return NULL;
 }
 
-int init_poll(pthread_t *threads, struct events_head* queue_of_ready_clients)
+int avaible_thread;
+
+struct worker_type
+{
+	pthread_t thread_handle;
+	int socket;
+};
+
+void dispatch_client(struct worker_type* workers, int client_socket)
+{
+	avaible_thread++;
+
+	if(avaible_thread == MAX_THREADS)
+		avaible_thread = 0;
+
+	send(workers[avaible_thread].socket, &client_socket, sizeof(int), 0);
+}
+
+int init_poll(struct worker_type* workers)
 {
     int i;
     for(i = 0; i < MAX_THREADS; i++)
     {
-        if(pthread_create(&threads[i], NULL, handle_client, queue_of_ready_clients) == -1)
+    	int sockp[2];
+
+    	if(socketpair(AF_UNIX, SOCK_STREAM, 0, sockp) < 0)
+    		break;
+
+    	workers[i].socket = sockp[0];
+    	int* client_socket = malloc(sizeof(int));
+
+    	*client_socket = sockp[1];
+
+        if(pthread_create(&workers[i].thread_handle, NULL, handle_client, client_socket) == -1)
             break;
     }
 
@@ -91,8 +207,10 @@ int init_poll(pthread_t *threads, struct events_head* queue_of_ready_clients)
     {
         for(int j = 0; j < i; j++)
         {
-            pthread_exit(&threads[j]);
+            pthread_exit(&workers[j].thread_handle);
+            close(workers[j].socket);
         }
+
         return -1;
     }
 
@@ -105,21 +223,7 @@ void signal_handler(int sign_nr)
 	{
 		printf("\nClosing server ...\n");
 
-		printf("Closing sockets ...\n");
-
-        if(sockets != NULL)
-    	{
-            for(int i = 0; i < FD_SETSIZE; i++)
-    	        if(FD_ISSET(i, sockets))
-                {
-                    printf("client closed\n");
-                    close(i);
-                }
-        }
-        else
-        {
-            close(server);
-        }
+        close(server);
 
 	    printf("Done!\n");
 
@@ -163,7 +267,7 @@ int main(int argc, char* argv[])
     {
         LOG_ERROR("Eroare la socket option");
         goto close_server_socket;
-    }   
+    }
 
     server = server_socket;
 
@@ -181,84 +285,21 @@ int main(int argc, char* argv[])
         return -1;
     }
 
+    struct worker_type workers[MAX_THREADS];
+
+    init_poll(workers);
+
     printf("Server running on port %d\n", SERVER_PORT);
-    
-    fd_set current_set, copy_set;
-    FD_ZERO(&current_set);
-    
-    sockets = &current_set;
 
-    FD_SET(server_socket, &current_set);
-
-    STAILQ_HEAD(events_head, entry);
-
-    struct events_head events;
-
-    STAILQ_INIT(&events);
-
-    pthread_t threads[MAX_THREADS];
-
-    init_poll(&threads, &events);
+    int client_socket = -1;
 
     while(1)
     {
-        read_set = current_set;
-    	write_set = current_set;
-
-        if(select(FD_SETSIZE, &read_set, &write_set, NULL, NULL) == -1)
-        {
-            LOG_ERROR("Eroare la select");
-            goto close_sockets;
-        }
-
-        for(int i = 0; i < FD_SETSIZE; i++)
-        {
-            if(FD_ISSET(i, &read_set))
-            {
-                if(i == server_socket)
-                {
-                    struct sockaddr_in client_adress;
-                    socklen_t size = sizeof(client_adress);
-
-                    int client = accept(i, (struct sockaddr*)&client_adress, &size);
-
-                    FD_SET(client, &current_set);
-
-                    printf(
-                        "New client connected to server ip: %s port %d\n", 
-                        inet_ntoa(client_adress.sin_addr),
-                        ntohs(client_adress.sin_port)
-                    );
-                }
-                else
-                {
-                	struct entry client_event* = malloc(sizeof(struct entry));
-                	client_event->data.type = read_event;
-                	pthread_mutex_lock(&mutex);
-                	STAILQ_INSERT_TAIL(&events, client_event, entries);
-                	pthread_mutex_unlock(&mutex);
-
-                }
-            }
-            else if (FD_ISSET(i, &write_set))
-            {
-	    	    struct entry client_event* = malloc(sizeof(struct entry));
-				client_event->data.type = write_event;
-	        	pthread_mutex_lock(&mutex);
-	        	STAILQ_INSERT_TAIL(&events, client_event, entries);
-	        	pthread_mutex_unlock(&mutex);
-            }
-
-        }
+    	client_socket = accept(server_socket, NULL, NULL);
+    	dispatch_client(workers, client_socket);
     }
 
-close_sockets:
-    FD_CLR(server_socket, &current_set);
-    for(int i = 0; i < FD_SETSIZE; i++)
-        if(FD_ISSET(i, &current_set))
-            close(i);
 close_server_socket:
     close(server_socket);
-
     return -1;
 }
