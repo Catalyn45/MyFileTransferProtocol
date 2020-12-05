@@ -5,12 +5,21 @@ CFLAGS_WARNINGS = \
 
 LIBS = -lpthread
 
-ftp_server: main.c
-	$(CC) main.c -o ftp_server -Os $(CFLAGS_WARNINGS) $(LIBS)
+ftp_server: main.o server.o
+	$(CC) main.o server.o -o ftp_server $(LIBS)
 
-ftp_server_debug: main.c
-	$(CC) main.c -o ftp_server_debug -DDEBUG $(CFLAGS_WARNINGS) -g $(LIBS)
+ftp_server_debug: main_d.o server_d.o
+	$(CC) main.o server.o -o ftp_server_debug $(LIBS)
 
+main.o: main.c
+	$(CC) -c $(CFLAGS_WARNINGS) -Os main.c -o main.o
+server.o: server.c
+	$(CC) -c $(CFLAGS_WARNINGS) -Os server.c -o server.o
+
+main_d.o: main.c
+	$(CC) -c -DDEBUG $(CFLAGS_WARNINGS) -g main.c -o main_d.o
+server_d.o: server.c
+	$(CC) -c -DDEBUG $(CFLAGS_WARNINGS) -g server.c -o server_d.o
 clean:
 	rm ftp_server
 	rm ftp_server_debug
