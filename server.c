@@ -16,6 +16,52 @@ void delete_socket(struct slisthead* clients, int socket)
 	}
 }
 
+int show_files(int socket, const struct command* cmd)
+{
+    char buffer[BUFFER_CHUNK];
+    buffer[0] = '\0';
+
+    const char* path = cmd->args;
+
+    DIR* d;
+
+    struct dirent* dir;
+
+    d = opendir(path);
+
+    if(d == NULL)
+    {
+        const char* error_msg = "Unavaible path, sry";
+        send_message(socket, error_msg, strlen(error_msg) + 1);
+        return 0;
+    }
+
+    while((dir = readdir(d)) != NULL)
+    {
+        strcat(buffer, dir->d_name);
+        strcat(buffer, "\n");
+    }
+
+    closedir(d);
+
+    send_message(socket, buffer, strlen(buffer) + 1);
+
+    return 0;
+}
+
+int execute_command(int socket, struct command* cmd)
+{
+    switch(cmd->index)
+    {
+    case get_files_list:
+        return show_files(socket, cmd);
+    default:
+        break;
+    }
+
+    return 0;
+}
+
 int send_message(int socket, const char* message, int len)
 {
     int total_sended = 0;
@@ -88,9 +134,15 @@ struct entry* get_element(struct slisthead* clients, int socket)
 
 int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd, fd_set* write_fd, int index)
 {
-    (void) write_fd;
-	char buffer[BUFFER_CHUNK];
-	int len = recv(client_socket, buffer, BUFFER_CHUNK - 1, 0);
+    struct entry* client = get_element(clients, client_socket);
+    struct command* cmd = NULL;
+    int len = 0;
+
+    if(client->data.state == connected)
+    {
+        cmd = malloc(sizeof(struct command));
+        len = recv_message(client_socket, (char*)cmd, sizeof(struct command));
+    }
 
 	if(len <= 0)
 	{
@@ -104,14 +156,16 @@ int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd,
 
 		LOG_MSG("Client disconnected");
 
+        free(cmd);
+
         if(len < 0)
             LOG_ERROR("Error at socket read");
 	}
-	else
-	{
-		buffer[len] = '\0';
-		printf("%s\n", buffer);
-	}
+    else
+    {
+        client->data.args = cmd;
+        FD_SET(client_socket, write_fd);
+    }
 
     return len;
 }
@@ -129,19 +183,31 @@ int socket_write(struct slisthead* clients, int client_socket, fd_set* write_fd)
 
     int result = 0;
 
-    if(client_info->data.state == 0)
+
+    switch(client_info->data.state)
     {
-    	const char* msg = "Bine ati venit pe serverul ftp a lui Catalyn45!\n";
-        result = send_message(client_socket, msg, strlen(msg));
+    case login:
+        {
+        	const char* msg = "Bine ati venit pe serverul ftp a lui Catalyn45!\n";
+            result = send_message(client_socket, msg, strlen(msg) + 1);
 
-        if(result == -1)
-        {   
-            LOG_ERROR("Error at sending message");
-            return -1;
+            if(result == -1)
+            {   
+                LOG_ERROR("Error at sending message");
+                return -1;
+            }
+
+            client_info->data.state = connected;
+        	FD_CLR(client_socket, write_fd);
         }
-
-        client_info->data.state = 1;
-    	FD_CLR(client_socket, write_fd);
+        break;
+    case connected:
+        execute_command(client_socket, client_info->data.args);
+        free(client_info->data.args);
+        FD_CLR(client_socket, write_fd);
+        break;
+    default:
+        break;
     }
 
     return result;

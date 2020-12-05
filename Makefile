@@ -9,7 +9,7 @@ ftp_server: main.o server.o
 	$(CC) main.o server.o -o ftp_server $(LIBS)
 
 ftp_server_debug: main_d.o server_d.o
-	$(CC) main.o server.o -o ftp_server_debug $(LIBS)
+	$(CC) main_d.o server_d.o -o ftp_server_debug $(LIBS)
 
 main.o: main.c
 	$(CC) -c $(CFLAGS_WARNINGS) -Os main.c -o main.o

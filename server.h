@@ -15,6 +15,7 @@
 #include <stdlib.h>
 #include <pthread.h>
 #include <sys/queue.h>
+#include <dirent.h>
 
 #define BACK_LOG 10
 #define BUFFER_CHUNK 1024
@@ -30,16 +31,37 @@
 // Global referince to server socket
 int server;
 
+//States of a connected client
+
+enum states
+{
+	login,
+	connected,
+	in_transfer
+};
 
 // A structure shere we save all the informations about the clients
 struct client_info
 {
 	int socket;
-	char name[20];
-	int command;
-	int state;
+	enum states state;
+	void* args;
 };
 
+//all the avaible
+
+enum commands_list
+{
+	get_files_list,
+	get_file
+};
+//command structure
+
+struct command
+{
+	char args[BUFFER_CHUNK];
+	int index;
+};
 
 // A structure for a linked list of client_info type
 struct entry
@@ -73,6 +95,7 @@ struct worker_type
 //Array for saving data about all the workers
 struct worker_type workers[MAX_THREADS];
 
+int parse_command(const struct command* cmd);
 
 void signal_handler(int sign_nr);
 
@@ -92,6 +115,7 @@ void dispatch_client(struct worker_type* workers, int client_socket);
 void* handle_client(void* args);
 
 int init_thread(struct worker_type* workers);
+int setup_server();
 
 int run();
 
