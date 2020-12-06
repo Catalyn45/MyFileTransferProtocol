@@ -19,6 +19,7 @@
 
 #define BACK_LOG 10
 #define BUFFER_CHUNK 1024
+#define DATA_TRANSFER_CHUNK 1024 * 32
 #define SERVER_PORT 8089
 #define MAX_THREADS 2
 
@@ -36,8 +37,19 @@ int server;
 enum states
 {
 	login,
-	connected,
-	in_transfer
+	connected
+};
+
+struct transfer_info
+{
+	int file_descriptor;
+	int finished;
+};
+
+struct file_info
+{
+	off_t file_size;
+	int file_type;
 };
 
 // A structure shere we save all the informations about the clients
@@ -45,6 +57,9 @@ struct client_info
 {
 	int socket;
 	enum states state;
+	fd_set* master;
+	fd_set* write;
+	struct command* current_command;
 	void* args;
 };
 
@@ -106,13 +121,18 @@ struct entry* get_element(struct slisthead* clients, int socket);
 int send_message(int socket, const char* message, int len);
 int recv_message(int socket, char* buffer, int expected_len);
 
-int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd, fd_set* write_fd, int index);
-int socket_write(struct slisthead* clients, int client_socket, fd_set* write_fd);
+int socket_read(int client_socket, struct slisthead* clients, int index);
+int socket_write(int client_socket, struct slisthead* clients, int index);
 
 void exit_thread(struct slisthead* clients, int index);
 
 void dispatch_client(struct worker_type* workers, int client_socket);
 void* handle_client(void* args);
+
+int send_file(struct entry* client);
+int show_files(struct entry* client);
+
+int execute_command(struct entry* client);
 
 int init_thread(struct worker_type* workers);
 int setup_server();

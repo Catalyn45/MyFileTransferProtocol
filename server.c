@@ -2,6 +2,7 @@
 
 void delete_socket(struct slisthead* clients, int socket)
 {
+
 	struct entry* it;
 
 	SLIST_FOREACH(it, clients, entries)
@@ -16,8 +17,13 @@ void delete_socket(struct slisthead* clients, int socket)
 	}
 }
 
-int show_files(int socket, const struct command* cmd)
+int show_files(struct entry* client)
 {
+    int socket = client->data.socket;
+
+    struct command* cmd = client->data.args;
+    
+
     char buffer[BUFFER_CHUNK];
     buffer[0] = '\0';
 
@@ -46,15 +52,80 @@ int show_files(int socket, const struct command* cmd)
 
     send_message(socket, buffer, strlen(buffer) + 1);
 
+    FD_CLR(socket, client->data.write);
+
     return 0;
 }
 
-int execute_command(int socket, struct command* cmd)
+int send_file(struct entry* client)
 {
+    struct command* cmd = client->data.current_command;
+
+
+    struct transfer_info* info = client->data.args;
+
+    char buffer[DATA_TRANSFER_CHUNK];
+
+    if (info == NULL)
+    {
+        info = malloc(sizeof(struct transfer_info));
+
+        if(info == NULL)
+        {
+            LOG_ERROR("Cant alloc memory");
+            return -1;
+        }
+
+        info->file_descriptor = open(cmd->args, O_RDONLY);
+
+        struct file_info fi;
+        fi.file_type = 0;
+
+        fi.file_size = lseek(info->file_descriptor, 0L, SEEK_END);
+        lseek(info->file_descriptor, 0L, SEEK_SET);
+
+        info->finished = 0;
+
+        client->data.args = (void*)info;
+
+        send_message(client->data.socket, (const char*)&fi, sizeof(fi));
+    }
+
+    int len = read(info->file_descriptor, buffer, DATA_TRANSFER_CHUNK);
+
+    if(len > 0)
+    {
+        send_message(client->data.socket, buffer, len);
+    }
+    else
+    {
+        close(info->file_descriptor);
+        free(info);
+        client->data.args = NULL;
+        FD_CLR(client->data.socket, client->data.write);
+    }
+
+    return 0;
+}
+
+int execute_command(struct entry* client)
+{
+    if(client == NULL)
+        return -1;
+
+    struct command* cmd = client->data.current_command;
+
+    if(cmd == NULL)
+        return -1;
+
     switch(cmd->index)
     {
     case get_files_list:
-        return show_files(socket, cmd);
+        return show_files(client);
+        break;
+    case get_file:
+        return send_file(client);
+        break;
     default:
         break;
     }
@@ -132,7 +203,7 @@ struct entry* get_element(struct slisthead* clients, int socket)
 	return NULL;
 }
 
-int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd, fd_set* write_fd, int index)
+int socket_read(int client_socket, struct slisthead* clients, int index)
 {
     struct entry* client = get_element(clients, client_socket);
     struct command* cmd = NULL;
@@ -141,12 +212,19 @@ int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd,
     if(client->data.state == connected)
     {
         cmd = malloc(sizeof(struct command));
+
+        if(cmd == NULL)
+        {
+            LOG_ERROR("Error at allocating memory");
+            return -1;
+        }
+
         len = recv_message(client_socket, (char*)cmd, sizeof(struct command));
     }
 
 	if(len <= 0)
 	{
-		FD_CLR(client_socket, master_fd);
+		FD_CLR(client_socket, client->data.master);
 
 		delete_socket(clients, client_socket);
 
@@ -163,15 +241,17 @@ int socket_read(int client_socket, struct slisthead* clients, fd_set* master_fd,
 	}
     else
     {
-        client->data.args = cmd;
-        FD_SET(client_socket, write_fd);
+        client->data.current_command = cmd;
+        FD_SET(client_socket, client->data.write);
     }
 
     return len;
 }
 
-int socket_write(struct slisthead* clients, int client_socket, fd_set* write_fd)
+int socket_write(int client_socket, struct slisthead* clients, int index)
 {
+
+    (void) index;
 
     struct entry* client_info = get_element(clients, client_socket);
 
@@ -182,7 +262,6 @@ int socket_write(struct slisthead* clients, int client_socket, fd_set* write_fd)
     }
 
     int result = 0;
-
 
     switch(client_info->data.state)
     {
@@ -198,13 +277,11 @@ int socket_write(struct slisthead* clients, int client_socket, fd_set* write_fd)
             }
 
             client_info->data.state = connected;
-        	FD_CLR(client_socket, write_fd);
+        	FD_CLR(client_socket, client_info->data.write);
         }
         break;
     case connected:
-        execute_command(client_socket, client_info->data.args);
-        free(client_info->data.args);
-        FD_CLR(client_socket, write_fd);
+            execute_command(client_info);
         break;
     default:
         break;
@@ -289,7 +366,10 @@ void* handle_client(void* args)
 
     				struct entry client;
     				memset(&client, 0, sizeof(client));
+
     				client.data.socket = socket_to_add;
+                    client.data.master = &master_fd;
+                    client.data.write = &write_fd;
     				
     				if(insert_client(&clients, client) == -1)
                     {
@@ -304,7 +384,7 @@ void* handle_client(void* args)
     			}
     			else
     			{
-    				if(socket_read(i, &clients, &master_fd, &write_fd, main_thread.index) <= 0)
+    				if(socket_read(i, &clients, main_thread.index) <= 0)
                     {
                         if(SLIST_EMPTY(&clients))
                         {
@@ -318,8 +398,7 @@ void* handle_client(void* args)
     		}
     		else if(FD_ISSET(i, &copy_write_fd))
     		{
-    			fflush(stdout);
-    			socket_write(&clients, i, &write_fd);
+    			socket_write(i, &clients, main_thread.index);
     		}
     	}
 
