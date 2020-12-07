@@ -1,20 +1,24 @@
 #include "server.h"
 
-void delete_socket(struct slisthead* clients, int socket)
+void delete_command(struct entry* client)
 {
+    if(client->data.current_command == NULL)
+        return;
 
-	struct entry* it;
+    unsigned int index = client->data.current_command->index;
 
-	SLIST_FOREACH(it, clients, entries)
-	{
-		if(it->data.socket == socket)
-		{
-			SLIST_REMOVE(clients, it, entry, entries);
-			close(it->data.socket);
-			free(it);
-			return;
-		}
-	}
+    if(commands_list[index].free != NULL)
+        commands_list[index].free(client->data.args);
+
+    free(client->data.current_command);
+}
+
+void delete_client(struct slisthead* clients, struct entry* it)
+{
+	SLIST_REMOVE(clients, it, entry, entries);
+	close(it->data.socket);
+    delete_command(it);
+    free(it);
 }
 
 int show_files(struct entry* client)
@@ -52,8 +56,6 @@ int show_files(struct entry* client)
 
     send_message(socket, buffer, strlen(buffer) + 1);
 
-    FD_CLR(socket, client->data.write);
-
     return 0;
 }
 
@@ -61,12 +63,11 @@ int send_file(struct entry* client)
 {
     struct command* cmd = client->data.current_command;
 
-
     struct transfer_info* info = client->data.args;
 
     char buffer[DATA_TRANSFER_CHUNK];
 
-    if (info == NULL)
+    if (client->data.command_in_progress == 0)
     {
         info = malloc(sizeof(struct transfer_info));
 
@@ -77,6 +78,7 @@ int send_file(struct entry* client)
         }
 
         info->file_descriptor = open(cmd->args, O_RDONLY);
+        info->finished = 0;
 
         struct file_info fi;
         fi.file_type = 0;
@@ -84,9 +86,8 @@ int send_file(struct entry* client)
         fi.file_size = lseek(info->file_descriptor, 0L, SEEK_END);
         lseek(info->file_descriptor, 0L, SEEK_SET);
 
-        info->finished = 0;
-
         client->data.args = (void*)info;
+        client->data.command_in_progress = 1;
 
         send_message(client->data.socket, (const char*)&fi, sizeof(fi));
     }
@@ -94,18 +95,23 @@ int send_file(struct entry* client)
     int len = read(info->file_descriptor, buffer, DATA_TRANSFER_CHUNK);
 
     if(len > 0)
-    {
         send_message(client->data.socket, buffer, len);
-    }
     else
-    {
-        close(info->file_descriptor);
-        free(info);
-        client->data.args = NULL;
-        FD_CLR(client->data.socket, client->data.write);
-    }
+        client->data.command_in_progress = 0;
 
     return 0;
+}
+
+void send_file_free(void* args)
+{
+    if(args == NULL)
+        return;
+
+    struct transfer_info* info = (struct transfer_info*)args;
+
+    close(info->file_descriptor);
+
+    free(info);
 }
 
 int execute_command(struct entry* client)
@@ -118,17 +124,10 @@ int execute_command(struct entry* client)
     if(cmd == NULL)
         return -1;
 
-    switch(cmd->index)
-    {
-    case get_files_list:
-        return show_files(client);
-        break;
-    case get_file:
-        return send_file(client);
-        break;
-    default:
-        break;
-    }
+    if(cmd->index > COMMANDS_LEN)
+        return -1;
+
+    return commands_list[cmd->index].work(client);
 
     return 0;
 }
@@ -203,9 +202,10 @@ struct entry* get_element(struct slisthead* clients, int socket)
 	return NULL;
 }
 
-int socket_read(int client_socket, struct slisthead* clients, int index)
+int socket_read(struct entry* client, struct slisthead* clients, int index)
 {
-    struct entry* client = get_element(clients, client_socket);
+    int client_socket = client->data.socket;
+
     struct command* cmd = NULL;
     int len = 0;
 
@@ -226,7 +226,7 @@ int socket_read(int client_socket, struct slisthead* clients, int index)
 	{
 		FD_CLR(client_socket, client->data.master);
 
-		delete_socket(clients, client_socket);
+		delete_client(clients, client);
 
 		pthread_mutex_lock(&mutex);
 		clients_connected[index] --;
@@ -248,14 +248,15 @@ int socket_read(int client_socket, struct slisthead* clients, int index)
     return len;
 }
 
-int socket_write(int client_socket, struct slisthead* clients, int index)
+int socket_write(struct entry* client, struct slisthead* clients, int index)
 {
 
     (void) index;
+    (void) clients;
 
-    struct entry* client_info = get_element(clients, client_socket);
+    int client_socket = client->data.socket;
 
-    if(client_info == NULL)
+    if(client == NULL)
     {
         LOG_MSG("Client not in list");
         return -1;
@@ -263,7 +264,7 @@ int socket_write(int client_socket, struct slisthead* clients, int index)
 
     int result = 0;
 
-    switch(client_info->data.state)
+    switch(client->data.state)
     {
     case login:
         {
@@ -276,12 +277,23 @@ int socket_write(int client_socket, struct slisthead* clients, int index)
                 return -1;
             }
 
-            client_info->data.state = connected;
-        	FD_CLR(client_socket, client_info->data.write);
+            client->data.state = connected;
+        	FD_CLR(client_socket, client->data.write);
         }
         break;
     case connected:
-            execute_command(client_info);
+            execute_command(client);
+            if(client->data.command_in_progress == 0)
+            {
+                unsigned int index = client->data.current_command->index;
+                commands_list[index].free(client->data.args);
+                client->data.args = NULL;
+
+                free(client->data.current_command);
+                client->data.current_command = NULL;
+
+                FD_CLR(client_socket, client->data.write);
+            }
         break;
     default:
         break;
@@ -297,9 +309,7 @@ void exit_thread(struct slisthead* clients, int index)
 	while (!SLIST_EMPTY(clients))
 	{
     	it = SLIST_FIRST(clients);
-        SLIST_REMOVE_HEAD(clients, entries);
-        close(it->data.socket);
-        free(it);
+        delete_client(clients, it);
     }
 
     clients_connected[index] = -1;
@@ -335,56 +345,60 @@ void* handle_client(void* args)
             return NULL;
         }
 
-    	for(int i = 0; i < FD_SETSIZE; i++)
-    	{
-    		if(FD_ISSET(i, &read_fd))
-    		{
-    			if(i == main_thread_socket)
-    			{
-    				
-    				int socket_to_add = 0;
+        if FD_ISSET(main_thread_socket, &read_fd)
+        {
+            int socket_to_add = 0;
 
-    				if(recv_message(i, (char*)&socket_to_add, sizeof(int)) <= 0)
-                    {
-                        LOG_ERROR("Error at reciving new socket from mainthread");
-                        exit_thread(&clients, main_thread.index);
-                        pthread_detach(workers[main_thread.index].thread_handle);
-                        return NULL;
-                    }
+            if(recv_message(main_thread_socket, (char*)&socket_to_add, sizeof(int)) <= 0)
+            {
+                LOG_ERROR("Error at reciving new socket from mainthread");
+                exit_thread(&clients, main_thread.index);
+                pthread_detach(workers[main_thread.index].thread_handle);
+                return NULL;
+            }
 
-    				if(socket_to_add == -1)
-    				{
-    					exit_thread(&clients, main_thread.index);
-                        return NULL;
-    				}
+            if(socket_to_add == -1)
+            {
+                exit_thread(&clients, main_thread.index);
+                return NULL;
+            }
 
-    				LOG_MSG("Client connected");
+            LOG_MSG("Client connected");
 
-    				fflush(stdout);
+            fflush(stdout);
 
-    				FD_SET(socket_to_add, &master_fd);
+            FD_SET(socket_to_add, &master_fd);
 
-    				struct entry client;
-    				memset(&client, 0, sizeof(client));
+            struct entry client;
+            memset(&client, 0, sizeof(client));
 
-    				client.data.socket = socket_to_add;
-                    client.data.master = &master_fd;
-                    client.data.write = &write_fd;
-    				
-    				if(insert_client(&clients, client) == -1)
-                    {
-                        LOG_ERROR("Error at putting the client in list");
-                        exit_thread(&clients, main_thread.index);
-                        pthread_detach(workers[main_thread.index].thread_handle);
-                        return NULL;
-                    }
+            client.data.socket = socket_to_add;
+            client.data.master = &master_fd;
+            client.data.write = &write_fd;
+            
+            if(insert_client(&clients, client) == -1)
+            {
+                LOG_ERROR("Error at putting the client in list");
+                exit_thread(&clients, main_thread.index);
+                pthread_detach(workers[main_thread.index].thread_handle);
+                return NULL;
+            }
 
-                    FD_SET(socket_to_add, &write_fd);
+            FD_SET(socket_to_add, &write_fd);   
+        }
+        else
+        {
 
-    			}
-    			else
-    			{
-    				if(socket_read(i, &clients, main_thread.index) <= 0)
+            struct entry* it;
+            int socket;
+
+            SLIST_FOREACH(it, &clients, entries)
+            {
+                socket = it->data.socket;
+
+                if(FD_ISSET(socket, &read_fd))
+                {
+                    if(socket_read(it, &clients, main_thread.index) <= 0)
                     {
                         if(SLIST_EMPTY(&clients))
                         {
@@ -394,15 +408,15 @@ void* handle_client(void* args)
                             return NULL;
                         }
                     }
-    			}
-    		}
-    		else if(FD_ISSET(i, &copy_write_fd))
-    		{
-    			socket_write(i, &clients, main_thread.index);
-    		}
-    	}
-
+                }
+                else if(FD_ISSET(socket, &copy_write_fd))
+                {
+                    socket_write(it, &clients, main_thread.index);
+                }
+            }
+        }
     }
+
     return NULL;
 }
 
@@ -421,7 +435,7 @@ void dispatch_client(struct worker_type* workers, int client_socket)
 		{
             LOG_MSG("Creating new thread");
 
-			if(init_thread(&workers[i]) == -1)
+			if(init_thread(&workers[i], i) == -1)
             {
                 LOG_MSG("Failed to create the thread");
                 continue;
@@ -454,7 +468,7 @@ void dispatch_client(struct worker_type* workers, int client_socket)
     }
 }
 
-int init_thread(struct worker_type* worker)
+int init_thread(struct worker_type* worker, int index)
 {
 	int sockp[2];
 
@@ -475,6 +489,7 @@ int init_thread(struct worker_type* worker)
     }
 
 	worker_arg->socket = sockp[1];
+    worker_arg->index = index;
 
     if(pthread_create(&worker->thread_handle, NULL, handle_client, worker_arg) == -1)
     {

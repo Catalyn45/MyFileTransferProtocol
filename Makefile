@@ -13,16 +13,16 @@ ftp_server_debug: main_d.o server_d.o
 
 main.o: main.c
 	$(CC) -c $(CFLAGS_WARNINGS) -Os main.c -o main.o
-server.o: server.c
+server.o: server.c server.h
 	$(CC) -c $(CFLAGS_WARNINGS) -Os server.c -o server.o
 
 main_d.o: main.c
 	$(CC) -c -DDEBUG $(CFLAGS_WARNINGS) -g main.c -o main_d.o
-server_d.o: server.c
+server_d.o: server.c server.h
 	$(CC) -c -DDEBUG $(CFLAGS_WARNINGS) -g server.c -o server_d.o
 clean:
-	rm ftp_server
-	rm ftp_server_debug
+	find . -name "*.o" -type f -delete
+	find . -name "ftp_server" -type f -delete
 
 all: ftp_server
 

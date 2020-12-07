@@ -31,7 +31,7 @@ struct file_info
 	int file_type;
 };
 
-int main()
+int main(int argc, char* argv[])
 {
 	struct sockaddr_in server_address;
     
@@ -75,18 +75,19 @@ int main()
 
  	recv(server_socket, &fi, sizeof(fi), 0);
 
- 	int fd = open("transfered_file.zip", O_CREAT | O_WRONLY);
+ 	int fd = open(argv[1], O_CREAT | O_WRONLY);
 
  	unsigned long tm = (unsigned long)time(NULL);
  	off_t last_bytes_remaining = fi.file_size;
+ 	off_t initial_size = fi.file_size;
 
     while(fi.file_size > 0)
     {
     	if((unsigned long)time(NULL) - tm >= 1)
     	{
     		tm = (unsigned long)time(NULL);
-    		printf("%ld KB/s\n", (last_bytes_remaining - fi.file_size) / 1000);
-    		printf("Remaining: %ld\n", fi.file_size / 1000);
+    		printf("%ld KB/s (%ld MB/s)\n", (last_bytes_remaining - fi.file_size) / 1000, (last_bytes_remaining - fi.file_size) / 1000000);
+    		printf("Downloaded: %ld%%\n", (100 - (fi.file_size * 100) / initial_size));
     		last_bytes_remaining = fi.file_size;
     	}
 

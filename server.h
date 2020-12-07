@@ -24,10 +24,10 @@
 #define MAX_THREADS 2
 
 #define LOG_ERROR(message) \
-    printf("%s\n%s\n\n", message, strerror(errno))
+    printf("%s\n%s\nLine: %d\n\n", message, strerror(errno), __LINE__)
 
 #define LOG_MSG(message) \
-    printf("%s\n", message);
+    printf("%s\n", message)
 
 // Global referince to server socket
 int server;
@@ -39,6 +39,8 @@ enum states
 	login,
 	connected
 };
+
+//Info for send_file method
 
 struct transfer_info
 {
@@ -60,22 +62,14 @@ struct client_info
 	fd_set* master;
 	fd_set* write;
 	struct command* current_command;
+	int command_in_progress;
 	void* args;
 };
-
-//all the avaible
-
-enum commands_list
-{
-	get_files_list,
-	get_file
-};
-//command structure
 
 struct command
 {
 	char args[BUFFER_CHUNK];
-	int index;
+	unsigned int index;
 };
 
 // A structure for a linked list of client_info type
@@ -86,6 +80,15 @@ struct entry
 };
 
 SLIST_HEAD(slisthead, entry);
+
+typedef int (*client_fun_type)(struct entry* client);
+typedef void (*client_free_type)(void* args);
+
+struct client_function
+{
+	client_fun_type work;
+	client_free_type free;
+};
 
 //Mutex for thread syncronization
 pthread_mutex_t mutex;// = PTHREAD_MUTEX_INITIALIZER;
@@ -114,15 +117,17 @@ int parse_command(const struct command* cmd);
 
 void signal_handler(int sign_nr);
 
-void delete_socket(struct slisthead* clients, int socket);
+void delete_client(struct slisthead* clients, struct entry* it);
 int insert_client(struct slisthead* clients, struct entry client);
 struct entry* get_element(struct slisthead* clients, int socket);
+
+void delete_command(struct entry* client);
 
 int send_message(int socket, const char* message, int len);
 int recv_message(int socket, char* buffer, int expected_len);
 
-int socket_read(int client_socket, struct slisthead* clients, int index);
-int socket_write(int client_socket, struct slisthead* clients, int index);
+int socket_read(struct entry* client, struct slisthead* clients, int index);
+int socket_write(struct entry* client, struct slisthead* clients, int index);
 
 void exit_thread(struct slisthead* clients, int index);
 
@@ -130,13 +135,22 @@ void dispatch_client(struct worker_type* workers, int client_socket);
 void* handle_client(void* args);
 
 int send_file(struct entry* client);
+void send_file_free(void* args);
+
 int show_files(struct entry* client);
 
 int execute_command(struct entry* client);
 
-int init_thread(struct worker_type* workers);
+int init_thread(struct worker_type* workers, int index);
 int setup_server();
 
 int run();
+
+struct client_function commands_list[] = {
+	{show_files, NULL},          // index 0
+	{send_file,  send_file_free} // index 1 etc.
+};
+
+#define COMMANDS_LEN (sizeof(commands_list) / sizeof(*commands_list))
 
 #endif
