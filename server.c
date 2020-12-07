@@ -213,6 +213,7 @@ int socket_read(struct entry* client, struct slisthead* clients, int index)
 	if(len <= 0)
 	{
 		FD_CLR(client_socket, client->data.master);
+        FD_CLR(client_socket, client->data.write);
 
 		delete_client(clients, client);
 
