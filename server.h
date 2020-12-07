@@ -1,5 +1,5 @@
-#ifndef _SERVER_H
-#define _SERVER_H
+#ifndef SERVER_H
+#define SERVER_H
 
 #include <stdio.h>
 #include <sys/select.h>
@@ -113,13 +113,10 @@ struct worker_type
 //Array for saving data about all the workers
 struct worker_type workers[MAX_THREADS];
 
-int parse_command(const struct command* cmd);
-
 void signal_handler(int sign_nr);
 
 void delete_client(struct slisthead* clients, struct entry* it);
 int insert_client(struct slisthead* clients, struct entry client);
-struct entry* get_element(struct slisthead* clients, int socket);
 
 void delete_command(struct entry* client);
 
@@ -145,12 +142,5 @@ int init_thread(struct worker_type* workers, int index);
 int setup_server();
 
 int run();
-
-struct client_function commands_list[] = {
-	{show_files, NULL},          // index 0
-	{send_file,  send_file_free} // index 1 etc.
-};
-
-#define COMMANDS_LEN (sizeof(commands_list) / sizeof(*commands_list))
 
 #endif

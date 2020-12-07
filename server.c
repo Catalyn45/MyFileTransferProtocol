@@ -1,5 +1,10 @@
 #include "server.h"
 
+struct client_function commands_list[] = {
+    {show_files, NULL},          // index 0
+    {send_file,  send_file_free} // index 1 etc.
+};
+
 void delete_command(struct entry* client)
 {
     if(client->data.current_command == NULL)
@@ -124,10 +129,8 @@ int execute_command(struct entry* client)
     if(cmd == NULL)
         return -1;
 
-    if(cmd->index > COMMANDS_LEN)
-        return -1;
-
     return commands_list[cmd->index].work(client);
+
 
     return 0;
 }
@@ -185,21 +188,6 @@ int insert_client(struct slisthead* clients, struct entry client)
 	SLIST_INSERT_HEAD(clients, client_info, entries);
 
     return 0;
-}
-
-struct entry* get_element(struct slisthead* clients, int socket)
-{
-	struct entry* it;
-
-	SLIST_FOREACH(it, clients, entries)
-	{
-		if(it->data.socket == socket)
-		{
-			return it;
-		}
-	}
-
-	return NULL;
 }
 
 int socket_read(struct entry* client, struct slisthead* clients, int index)
