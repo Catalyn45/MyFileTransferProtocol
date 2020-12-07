@@ -282,7 +282,7 @@ int socket_write(struct entry* client, struct slisthead* clients, int index)
         }
         break;
     case connected:
-            execute_command(client);
+            result = execute_command(client);
             if(client->data.command_in_progress == 0)
             {
                 unsigned int index = client->data.current_command->index;
@@ -294,6 +294,7 @@ int socket_write(struct entry* client, struct slisthead* clients, int index)
 
                 FD_CLR(client_socket, client->data.write);
             }
+            return result;
         break;
     default:
         break;
@@ -464,7 +465,10 @@ void dispatch_client(struct worker_type* workers, int client_socket)
 	if(send_message(workers[index].socket, (const char*)&client_socket, sizeof(int)) == -1)
     {
         LOG_ERROR("Can't send the socket to thread");
-        return;
+        close(workers[index].socket);
+        close(client_socket);
+        pthread_detach(workers[index].thread_handle);
+        clients_connected[i] = -1;
     }
 }
 
