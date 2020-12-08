@@ -1,8 +1,7 @@
 #include "server.h"
 
-struct client_function commands_list[] = {
-    {send_file,  send_file_free} // index 0 etc.  | free function can be NULL
-};
+extern struct client_function commands_list[];
+extern unsigned int max_cmds;
 
 void delete_command(struct entry* client)
 {
@@ -33,88 +32,20 @@ void delete_client(struct entry* it, struct slisthead* clients)
     free(it);
 }
 
-int send_file(struct entry* client)
-{
-    struct command* cmd = client->data.current_command;
-
-    struct transfer_info* info = client->data.args;
-
-    char buffer[DATA_TRANSFER_CHUNK];
-
-    if (client->data.args == NULL)
-    {
-        info = malloc(sizeof(struct transfer_info));
-
-        if(info == NULL)
-        {
-            LOG_ERROR("Cant alloc memory");
-            return CLIENT_ERROR;
-        }
-
-        info->file_descriptor = open(cmd->args, O_RDONLY);
-        info-> state = 0;
-
-        client->data.args = (void*)info;
-
-        return CLIENT_WANT_WRITE;
-    }
-
-    if(info->state == 0)
-    {
-        struct file_info fi;
-
-        fi.file_type = 0;
-        fi.file_size = lseek(info->file_descriptor, 0L, SEEK_END);
-        lseek(info->file_descriptor, 0L, SEEK_SET);
-        send_message(client->data.socket, (const char*)&fi, sizeof(fi));
-        info->state = 1;
-        return CLIENT_WANT_WRITE;
-    }
-    
-    if(info->state == 1)
-    {
-        int len = read(info->file_descriptor, buffer, DATA_TRANSFER_CHUNK);
-
-        if(len > 0)
-        {
-            send_message(client->data.socket, buffer, len);
-            return CLIENT_WANT_WRITE;
-        }
-        else
-        {
-            return CLIENT_SUCCESS;
-        }
-    }
-
-    return CLIENT_ERROR;
-}
-
-void send_file_free(void* args)
-{
-    if(args == NULL)
-        return;
-
-    struct transfer_info* info = (struct transfer_info*)args;
-
-    close(info->file_descriptor);
-
-    free(info);
-}
-
-int execute_command(struct entry* client)
+enum client_result execute_command(struct entry* client)
 {
     if(client == NULL)
-        return -1;
+        return CLIENT_ERROR;
 
     struct command* cmd = client->data.current_command;
 
     if(cmd == NULL)
-        return -1;
+        return CLIENT_ERROR;
+
+    if(cmd->index >= max_cmds)
+        return CLIENT_ERROR;
 
     return commands_list[cmd->index].work(client);
-
-
-    return 0;
 }
 
 int send_message(int socket, const char* message, int len)
@@ -188,13 +119,10 @@ int get_command(struct entry* client)
 
     int len = recv_message(client->data.socket, (char*)cmd, sizeof(struct command));
 
-    if(len <= 0)
-        return len;
-
-    return 0;
+    return len;
 }
 
-int socket_read(struct entry* client)
+enum client_result socket_read(struct entry* client)
 {
     enum client_result result = CLIENT_WANT_READ;
 
@@ -202,7 +130,18 @@ int socket_read(struct entry* client)
     {
         if(client->data.current_command == NULL)
         {
-            get_command(client);
+            int result = get_command(client);
+
+            if(result < 0)
+            {
+                LOG_ERROR("Error at getting the command");
+                return CLIENT_ERROR;
+            }
+
+            if(result == 0)
+            {
+                return CLIENT_CLOSED;
+            }
         }
 
         result = execute_command(client);
@@ -230,9 +169,9 @@ int login_client(struct entry* client)
     return CLIENT_SUCCESS;
 }
 
-int socket_write(struct entry* client)
+enum client_result socket_write(struct entry* client)
 {
-    enum client_result result = CLIENT_SUCCESS;
+    enum client_result result = CLIENT_ERROR;
 
     switch(client->data.state)
     {
@@ -312,7 +251,6 @@ void* handle_client(void* args)
 
             LOG_MSG("Client connected");
 
-           
             struct entry client;
             memset(&client, 0, sizeof(client));
 
@@ -362,7 +300,6 @@ void* handle_client(void* args)
                     pthread_detach(workers[main_thread.index].thread_handle);
                     return NULL;
                 }
-
             }
         }
     }
@@ -399,11 +336,9 @@ void handle_result(struct entry* client, struct slisthead* clients, int index, e
 
         case CLIENT_CLOSED:
             delete_client(client, clients);
-
             pthread_mutex_lock(&mutex);
             clients_connected[index]--;
             pthread_mutex_unlock(&mutex);
-
             LOG_MSG("Client closed");
         break;
 

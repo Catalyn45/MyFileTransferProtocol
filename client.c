@@ -26,7 +26,7 @@
 #include <Ws2tcpip.h>
 #endif 
 
-#define IP "77.81.177.191"
+#define IP "127.0.0.1"
 
 #ifdef __linux__
 #define LOG_ERROR(message) \
@@ -105,7 +105,7 @@ int main(int argc, char* argv[])
 
     struct command cmd;
 
-    cmd.index = 1;
+    cmd.index = 0;
     strcpy(cmd.args, "test.rar");
 
     send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
