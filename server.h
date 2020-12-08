@@ -40,12 +40,21 @@ enum states
 	connected
 };
 
+enum client_result
+{
+    CLIENT_SUCCESS,
+    CLIENT_WANT_READ,
+    CLIENT_WANT_WRITE,
+    CLIENT_ERROR,
+    CLIENT_CLOSED
+};
+
 //Info for send_file method
 
 struct transfer_info
 {
 	int file_descriptor;
-	int finished;
+	int state;
 };
 
 struct file_info
@@ -59,10 +68,9 @@ struct client_info
 {
 	int socket;
 	enum states state;
-	fd_set* master;
+	fd_set* read;
 	fd_set* write;
 	struct command* current_command;
-	int command_in_progress;
 	void* args;
 };
 
@@ -115,7 +123,7 @@ struct worker_type workers[MAX_THREADS];
 
 void signal_handler(int sign_nr);
 
-void delete_client(struct slisthead* clients, struct entry* it);
+void delete_client(struct entry* it, struct slisthead* clients);
 int insert_client(struct slisthead* clients, struct entry client);
 
 void delete_command(struct entry* client);
@@ -123,12 +131,12 @@ void delete_command(struct entry* client);
 int send_message(int socket, const char* message, int len);
 int recv_message(int socket, char* buffer, int expected_len);
 
-int socket_read(struct entry* client, struct slisthead* clients, int index);
-int socket_write(struct entry* client, struct slisthead* clients, int index);
+int socket_read(struct entry* client);
+int socket_write(struct entry* client);
 
 void exit_thread(struct slisthead* clients, int index);
 
-void dispatch_client(struct worker_type* workers, int client_socket);
+void dispatch_client(int client_socket);
 void* handle_client(void* args);
 
 int send_file(struct entry* client);
@@ -137,6 +145,8 @@ void send_file_free(void* args);
 int show_files(struct entry* client);
 
 int execute_command(struct entry* client);
+
+void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result);
 
 int init_thread(struct worker_type* workers, int index);
 int setup_server();

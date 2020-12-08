@@ -1,8 +1,7 @@
 #include "server.h"
 
 struct client_function commands_list[] = {
-    {show_files, NULL},          // index 0
-    {send_file,  send_file_free} // index 1 etc.
+    {send_file,  send_file_free} // index 0 etc.  | free function can be NULL
 };
 
 void delete_command(struct entry* client)
@@ -14,54 +13,24 @@ void delete_command(struct entry* client)
 
     if(commands_list[index].free != NULL)
         commands_list[index].free(client->data.args);
+    
+    client->data.args = NULL;
 
     free(client->data.current_command);
+
+    client->data.current_command = NULL;
 }
 
-void delete_client(struct slisthead* clients, struct entry* it)
+void delete_client(struct entry* it, struct slisthead* clients)
 {
 	SLIST_REMOVE(clients, it, entry, entries);
 	close(it->data.socket);
+    FD_CLR(it->data.socket, it->data.read);
+    FD_CLR(it->data.socket, it->data.write);
+
+    
     delete_command(it);
     free(it);
-}
-
-int show_files(struct entry* client)
-{
-    int socket = client->data.socket;
-
-    struct command* cmd = client->data.args;
-    
-
-    char buffer[BUFFER_CHUNK];
-    buffer[0] = '\0';
-
-    const char* path = cmd->args;
-
-    DIR* d;
-
-    struct dirent* dir;
-
-    d = opendir(path);
-
-    if(d == NULL)
-    {
-        const char* error_msg = "Unavaible path, sry";
-        send_message(socket, error_msg, strlen(error_msg) + 1);
-        return 0;
-    }
-
-    while((dir = readdir(d)) != NULL)
-    {
-        strcat(buffer, dir->d_name);
-        strcat(buffer, "\n");
-    }
-
-    closedir(d);
-
-    send_message(socket, buffer, strlen(buffer) + 1);
-
-    return 0;
 }
 
 int send_file(struct entry* client)
@@ -72,39 +41,52 @@ int send_file(struct entry* client)
 
     char buffer[DATA_TRANSFER_CHUNK];
 
-    if (client->data.command_in_progress == 0)
+    if (client->data.args == NULL)
     {
         info = malloc(sizeof(struct transfer_info));
 
         if(info == NULL)
         {
             LOG_ERROR("Cant alloc memory");
-            return -1;
+            return CLIENT_ERROR;
         }
 
         info->file_descriptor = open(cmd->args, O_RDONLY);
-        info->finished = 0;
-
-        struct file_info fi;
-        fi.file_type = 0;
-
-        fi.file_size = lseek(info->file_descriptor, 0L, SEEK_END);
-        lseek(info->file_descriptor, 0L, SEEK_SET);
+        info-> state = 0;
 
         client->data.args = (void*)info;
-        client->data.command_in_progress = 1;
 
-        send_message(client->data.socket, (const char*)&fi, sizeof(fi));
+        return CLIENT_WANT_WRITE;
     }
 
-    int len = read(info->file_descriptor, buffer, DATA_TRANSFER_CHUNK);
+    if(info->state == 0)
+    {
+        struct file_info fi;
 
-    if(len > 0)
-        send_message(client->data.socket, buffer, len);
-    else
-        client->data.command_in_progress = 0;
+        fi.file_type = 0;
+        fi.file_size = lseek(info->file_descriptor, 0L, SEEK_END);
+        lseek(info->file_descriptor, 0L, SEEK_SET);
+        send_message(client->data.socket, (const char*)&fi, sizeof(fi));
+        info->state = 1;
+        return CLIENT_WANT_WRITE;
+    }
+    
+    if(info->state == 1)
+    {
+        int len = read(info->file_descriptor, buffer, DATA_TRANSFER_CHUNK);
 
-    return 0;
+        if(len > 0)
+        {
+            send_message(client->data.socket, buffer, len);
+            return CLIENT_WANT_WRITE;
+        }
+        else
+        {
+            return CLIENT_SUCCESS;
+        }
+    }
+
+    return CLIENT_ERROR;
 }
 
 void send_file_free(void* args)
@@ -190,100 +172,75 @@ int insert_client(struct slisthead* clients, struct entry client)
     return 0;
 }
 
-int socket_read(struct entry* client, struct slisthead* clients, int index)
+int get_command(struct entry* client)
 {
-    int client_socket = client->data.socket;
-
     struct command* cmd = NULL;
-    int len = 0;
 
-    if(client->data.state == connected)
+    cmd = malloc(sizeof(struct command));
+
+    if(cmd == NULL)
     {
-        cmd = malloc(sizeof(struct command));
-
-        if(cmd == NULL)
-        {
-            LOG_ERROR("Error at allocating memory");
-            return -1;
-        }
-
-        len = recv_message(client_socket, (char*)cmd, sizeof(struct command));
-    }
-
-	if(len <= 0)
-	{
-		FD_CLR(client_socket, client->data.master);
-        FD_CLR(client_socket, client->data.write);
-
-		delete_client(clients, client);
-
-		pthread_mutex_lock(&mutex);
-		clients_connected[index] --;
-		pthread_mutex_unlock(&mutex);
-
-		LOG_MSG("Client disconnected");
-
-        free(cmd);
-
-        if(len < 0)
-            LOG_ERROR("Error at socket read");
-	}
-    else
-    {
-        client->data.current_command = cmd;
-        FD_SET(client_socket, client->data.write);
-    }
-
-    return len;
-}
-
-int socket_write(struct entry* client, struct slisthead* clients, int index)
-{
-
-    (void) index;
-    (void) clients;
-
-    int client_socket = client->data.socket;
-
-    if(client == NULL)
-    {
-        LOG_MSG("Client not in list");
+        LOG_ERROR("Error at allocating memory");
         return -1;
     }
 
-    int result = 0;
+    client->data.current_command = cmd;
+
+    int len = recv_message(client->data.socket, (char*)cmd, sizeof(struct command));
+
+    if(len <= 0)
+        return len;
+
+    return 0;
+}
+
+int socket_read(struct entry* client)
+{
+    enum client_result result = CLIENT_WANT_READ;
+
+    if(client->data.state == connected)
+    {
+        if(client->data.current_command == NULL)
+        {
+            get_command(client);
+        }
+
+        result = execute_command(client);
+    }
+
+    return result;
+}
+
+int login_client(struct entry* client)
+{
+    int client_socket = client->data.socket;
+
+    const char* msg = "Bine ati venit pe serverul ftp a lui Catalyn45!\n";
+
+    int result = send_message(client_socket, msg, strlen(msg) + 1);
+
+    if(result == -1)
+    {   
+        LOG_ERROR("Error at sending message");
+        return CLIENT_ERROR;
+    }
+
+    client->data.state = connected;
+
+    return CLIENT_SUCCESS;
+}
+
+int socket_write(struct entry* client)
+{
+    enum client_result result = CLIENT_SUCCESS;
 
     switch(client->data.state)
     {
     case login:
-        {
-        	const char* msg = "Bine ati venit pe serverul ftp a lui Catalyn45!\n";
-            result = send_message(client_socket, msg, strlen(msg) + 1);
-
-            if(result == -1)
-            {   
-                LOG_ERROR("Error at sending message");
-                return -1;
-            }
-
-            client->data.state = connected;
-        	FD_CLR(client_socket, client->data.write);
-        }
+            result = login_client(client);
         break;
     case connected:
             result = execute_command(client);
-            if(client->data.command_in_progress == 0)
-            {
-                unsigned int index = client->data.current_command->index;
-                commands_list[index].free(client->data.args);
-                client->data.args = NULL;
-
-                free(client->data.current_command);
-                client->data.current_command = NULL;
-
-                FD_CLR(client_socket, client->data.write);
-            }
-            return result;
         break;
     default:
         break;
@@ -299,7 +256,7 @@ void exit_thread(struct slisthead* clients, int index)
 	while (!SLIST_EMPTY(clients))
 	{
     	it = SLIST_FIRST(clients);
-        delete_client(clients, it);
+        delete_client(it, clients);
     }
 
     clients_connected[index] = -1;
@@ -313,19 +270,19 @@ void* handle_client(void* args)
 
     struct slisthead clients;
     SLIST_INIT(&clients);
-    fd_set master_fd, read_fd, write_fd, copy_write_fd;
+    fd_set read_fd, copy_read_fd, write_fd, copy_write_fd;
  
-    FD_ZERO(&master_fd);
+    FD_ZERO(&read_fd);
     FD_ZERO(&write_fd);
 
-    FD_SET(main_thread_socket, &master_fd);
+    FD_SET(main_thread_socket, &read_fd);
 
     while(1)
     {
-    	read_fd = master_fd;
+    	copy_read_fd = read_fd;
     	copy_write_fd = write_fd;
 
-    	int count = select(FD_SETSIZE, &read_fd, &copy_write_fd, NULL, NULL);
+    	int count = select(FD_SETSIZE, &copy_read_fd, &copy_write_fd, NULL, NULL);
 
         if(count < 0)
         {
@@ -335,7 +292,7 @@ void* handle_client(void* args)
             return NULL;
         }
 
-        if FD_ISSET(main_thread_socket, &read_fd)
+        if FD_ISSET(main_thread_socket, &copy_read_fd)
         {
             int socket_to_add = 0;
 
@@ -355,15 +312,12 @@ void* handle_client(void* args)
 
             LOG_MSG("Client connected");
 
-            fflush(stdout);
-
-            FD_SET(socket_to_add, &master_fd);
-
+           
             struct entry client;
             memset(&client, 0, sizeof(client));
 
             client.data.socket = socket_to_add;
-            client.data.master = &master_fd;
+            client.data.read = &read_fd;
             client.data.write = &write_fd;
             
             if(insert_client(&clients, client) == -1)
@@ -378,31 +332,37 @@ void* handle_client(void* args)
         }
         else
         {
-
             struct entry* it;
             int socket;
 
             SLIST_FOREACH(it, &clients, entries)
             {
                 socket = it->data.socket;
+                enum client_result result = CLIENT_ERROR;
 
-                if(FD_ISSET(socket, &read_fd))
+                if(FD_ISSET(socket, &copy_read_fd))
                 {
-                    if(socket_read(it, &clients, main_thread.index) <= 0)
-                    {
-                        if(SLIST_EMPTY(&clients))
-                        {
-                            LOG_MSG("no clients, closing the thread");
-                            exit_thread(&clients, main_thread.index);
-                            pthread_detach(workers[main_thread.index].thread_handle);
-                            return NULL;
-                        }
-                    }
+                    result = socket_read(it);
                 }
                 else if(FD_ISSET(socket, &copy_write_fd))
                 {
-                    socket_write(it, &clients, main_thread.index);
+                    result = socket_write(it);
                 }
+                else
+                {
+                    continue;
+                }
+
+                handle_result(it, &clients, main_thread.index, result);
+
+                if((result == CLIENT_CLOSED || result == CLIENT_ERROR) && SLIST_EMPTY(&clients))
+                {
+                    LOG_MSG("no clients, closing the thread");
+                    exit_thread(&clients, main_thread.index);
+                    pthread_detach(workers[main_thread.index].thread_handle);
+                    return NULL;
+                }
+
             }
         }
     }
@@ -410,7 +370,49 @@ void* handle_client(void* args)
     return NULL;
 }
 
-void dispatch_client(struct worker_type* workers, int client_socket)
+void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result)
+{
+    switch(result)
+    {
+        case CLIENT_SUCCESS:
+            delete_command(client);
+        //fall through
+        case CLIENT_WANT_READ:
+            FD_SET(client->data.socket, client->data.read);
+            FD_CLR(client->data.socket, client->data.write);
+        break;
+
+        case CLIENT_WANT_WRITE:
+            FD_SET(client->data.socket, client->data.write);
+            FD_CLR(client->data.socket, client->data.read);
+        break;
+
+        case CLIENT_ERROR:
+            delete_client(client, clients);
+
+            pthread_mutex_lock(&mutex);
+            clients_connected[index]--;
+            pthread_mutex_unlock(&mutex);
+
+            LOG_ERROR("Error at client, client closeed");
+        break;
+
+        case CLIENT_CLOSED:
+            delete_client(client, clients);
+
+            pthread_mutex_lock(&mutex);
+            clients_connected[index]--;
+            pthread_mutex_unlock(&mutex);
+
+            LOG_MSG("Client closed");
+        break;
+
+        default:
+        break;
+    }
+}
+
+void dispatch_client(int client_socket)
 {
 	int index = 0;
     int min = -1;
@@ -603,7 +605,7 @@ int run()
             LOG_ERROR("Error at accepting client");
         }
         else
-    	   dispatch_client(workers, client_socket);
+    	   dispatch_client(client_socket);
     }
 
     return 0;
