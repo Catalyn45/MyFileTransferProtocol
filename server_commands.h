@@ -3,6 +3,8 @@
 #include "types.h"
 #include <dirent.h>
 
+#define DATA_TRANSFER_CHUNK 1024 * 32
+
 typedef enum client_result(*client_fun_type)(struct entry* client);
 typedef void (*client_free_type)(void* args);
 

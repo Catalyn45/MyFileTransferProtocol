@@ -57,7 +57,7 @@ enum client_result send_file(struct entry* client)
         }
 
         info->state = 1;
-        return CLIENT_WANT_WRITE;
+        return CLIENT_AGAIN;
     }
     
     if(info->state == 1)
@@ -67,7 +67,7 @@ enum client_result send_file(struct entry* client)
         if(len < 0)
         {
             LOG_ERROR("Error at reading from file");
-            return CLIENT_ERROR;
+            return CLIENT_AGAIN;
         }
 
         if(len > 0)
@@ -78,7 +78,7 @@ enum client_result send_file(struct entry* client)
                 return CLIENT_ERROR;
             }
 
-            return CLIENT_WANT_WRITE;
+            return CLIENT_AGAIN;
         }
         
         if(len == 0)

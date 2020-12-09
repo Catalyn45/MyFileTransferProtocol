@@ -14,8 +14,7 @@
 #include <sys/queue.h>
 
 #define BACK_LOG 10
-#define BUFFER_CHUNK 1024
-#define DATA_TRANSFER_CHUNK 1024 * 32
+#define MAX_ARGS_LEN 1024
 #define SERVER_PORT 8089
 #define MAX_THREADS 2
 
@@ -38,6 +37,7 @@ enum client_result
     CLIENT_SUCCESS,
     CLIENT_WANT_READ,
     CLIENT_WANT_WRITE,
+    CLIENT_AGAIN,
     CLIENT_ERROR,
     CLIENT_CLOSED
 };
@@ -55,7 +55,7 @@ struct client_info
 
 struct command
 {
-	char args[BUFFER_CHUNK];
+	char args[MAX_ARGS_LEN];
 	unsigned int index;
 };
 

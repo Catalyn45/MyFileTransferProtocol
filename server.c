@@ -341,7 +341,8 @@ void handle_result(struct entry* client, struct slisthead* clients, int index, e
             pthread_mutex_unlock(&mutex);
             LOG_MSG("Client closed");
         break;
-
+        case CLIENT_AGAIN:
+        //fall through
         default:
         break;
     }
@@ -440,6 +441,9 @@ close_socketpair:
 
 void signal_handler(int sign_nr)
 {
+
+    pthread_mutex_destroy(&mutex);
+
 	if(sign_nr == SIGINT)
 	{
 		LOG_MSG("Closing all the clients...");
