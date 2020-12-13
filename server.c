@@ -3,21 +3,33 @@
 extern struct client_function commands_list[];
 extern unsigned int max_cmds;
 
+struct command_args
+{
+    int command_index;
+    int buf_size;
+};
+
 void delete_command(struct entry* client)
 {
-    if(client->data.current_command == NULL)
+    client->data.current_command.cmd_state = COMMAND_NONE;
+
+    if(client->data.args == NULL)
         return;
 
-    unsigned int index = client->data.current_command->index;
+    unsigned int index = client->data.current_command.index;
+
+    if(index == 0)
+    {
+        struct command_args* args = client->data.args;
+        client->data.current_command.index = args->command_index;
+    }
+    else
+        client->data.current_command.index = 0;
 
     if(commands_list[index].free != NULL)
-        commands_list[index].free(client->data.args);
+        commands_list[index].free(client);
     
     client->data.args = NULL;
-
-    free(client->data.current_command);
-
-    client->data.current_command = NULL;
 }
 
 void delete_client(struct entry* it, struct slisthead* clients)
@@ -27,17 +39,16 @@ void delete_client(struct entry* it, struct slisthead* clients)
     FD_CLR(it->data.socket, it->data.read);
     FD_CLR(it->data.socket, it->data.write);
 
-    
     delete_command(it);
     free(it);
 }
 
-enum client_result execute_command(struct entry* client)
+enum client_result execute_command(struct entry* client, enum client_events event)
 {
     if(client == NULL)
         return CLIENT_ERROR;
 
-    struct command* cmd = client->data.current_command;
+    struct command* cmd = &client->data.current_command;
 
     if(cmd == NULL)
         return CLIENT_ERROR;
@@ -45,45 +56,32 @@ enum client_result execute_command(struct entry* client)
     if(cmd->index >= max_cmds)
         return CLIENT_ERROR;
 
-    return commands_list[cmd->index].work(client);
+    return commands_list[cmd->index].work(client, event);
 }
 
-int send_message(int socket, const char* message, int len)
+enum client_result init_command(struct entry* client)
 {
-    int total_sended = 0;
-    int sended = 0;
+    if(client == NULL)
+        return CLIENT_ERROR;
 
-    do
+    struct command* cmd = &client->data.current_command;
+
+    if(cmd == NULL)
+        return CLIENT_ERROR;
+
+    if(cmd->index >= max_cmds)
+        return CLIENT_ERROR;
+
+    if(commands_list[cmd->index].new == NULL)
+        return CLIENT_WANT_READ;
+
+    if(commands_list[cmd->index].new(client) == 0)
     {
-        sended = send(socket, message + total_sended, len - total_sended, 0);
+        client->data.current_command.cmd_state = COMMAND_READY;
+        return CLIENT_WANT_READ;
+    }
 
-        if(sended == -1)
-            return -1;
-
-        total_sended += sended;
-
-    }while(total_sended < len);
-
-    return total_sended;
-}
-
-int recv_message(int socket, char* buffer, int expected_len)
-{
-    int total_recved = 0;
-    int recved = 0;
-
-    do
-    {
-        recved = recv(socket, buffer + total_recved, expected_len - total_recved, 0);
-
-        if(recved <= 0)
-            return recved;
-
-        total_recved += recved;
-
-    }while(total_recved < expected_len);
-
-    return total_recved;
+    return CLIENT_ERROR;
 }
 
 int insert_client(struct slisthead* clients, struct entry client)
@@ -103,89 +101,19 @@ int insert_client(struct slisthead* clients, struct entry client)
     return 0;
 }
 
-int get_command(struct entry* client)
+enum client_result handle_event(struct entry* client, enum client_events event)
 {
-    struct command* cmd = NULL;
-
-    cmd = malloc(sizeof(struct command));
-
-    if(cmd == NULL)
+    switch(client->data.current_command.cmd_state)
     {
-        LOG_ERROR("Error at allocating memory");
-        return -1;
+        case COMMAND_NONE:
+            return init_command(client);
+        case COMMAND_READY:
+            return execute_command(client, event);
+        default:
+            break;
     }
 
-    client->data.current_command = cmd;
-
-    int len = recv_message(client->data.socket, (char*)cmd, sizeof(struct command));
-
-    return len;
-}
-
-enum client_result socket_read(struct entry* client)
-{
-    enum client_result result = CLIENT_WANT_READ;
-
-    if(client->data.state == connected)
-    {
-        if(client->data.current_command == NULL)
-        {
-            int result = get_command(client);
-
-            if(result < 0)
-            {
-                LOG_ERROR("Error at getting the command");
-                return CLIENT_ERROR;
-            }
-
-            if(result == 0)
-            {
-                return CLIENT_CLOSED;
-            }
-        }
-
-        result = execute_command(client);
-    }
-
-    return result;
-}
-
-int login_client(struct entry* client)
-{
-    int client_socket = client->data.socket;
-
-    const char* msg = "Bine ati venit pe serverul ftp a lui Catalyn45!\n";
-
-    int result = send_message(client_socket, msg, strlen(msg) + 1);
-
-    if(result == -1)
-    {   
-        LOG_ERROR("Error at sending message");
-        return CLIENT_ERROR;
-    }
-
-    client->data.state = connected;
-
-    return CLIENT_SUCCESS;
-}
-
-enum client_result socket_write(struct entry* client)
-{
-    enum client_result result = CLIENT_ERROR;
-
-    switch(client->data.state)
-    {
-    case login:
-            result = login_client(client);
-        break;
-    case connected:
-            result = execute_command(client);
-        break;
-    default:
-        break;
-    }
-
-    return result;
+    return CLIENT_ERROR;
 }
 
 void exit_thread(struct slisthead* clients, int index)
@@ -235,7 +163,7 @@ void* handle_client(void* args)
         {
             int socket_to_add = 0;
 
-            if(recv_message(main_thread_socket, (char*)&socket_to_add, sizeof(int)) <= 0)
+            if(recv(main_thread_socket, (char*)&socket_to_add, sizeof(int), 0) <= 0)
             {
                 LOG_ERROR("Error at reciving new socket from mainthread");
                 exit_thread(&clients, main_thread.index);
@@ -266,7 +194,7 @@ void* handle_client(void* args)
                 return NULL;
             }
 
-            FD_SET(socket_to_add, &write_fd);   
+            FD_SET(socket_to_add, &read_fd);   
         }
         else
         {
@@ -280,11 +208,11 @@ void* handle_client(void* args)
 
                 if(FD_ISSET(socket, &copy_read_fd))
                 {
-                    result = socket_read(it);
+                    result = handle_event(it, EVENT_READ);
                 }
                 else if(FD_ISSET(socket, &copy_write_fd))
                 {
-                    result = socket_write(it);
+                    result = handle_event(it, EVENT_WRITE);
                 }
                 else
                 {
@@ -310,7 +238,7 @@ void* handle_client(void* args)
 void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result)
 {
     switch(result)
-    {
+    {   
         case CLIENT_SUCCESS:
             delete_command(client);
         //fall through
@@ -336,9 +264,11 @@ void handle_result(struct entry* client, struct slisthead* clients, int index, e
 
         case CLIENT_CLOSED:
             delete_client(client, clients);
+
             pthread_mutex_lock(&mutex);
             clients_connected[index]--;
             pthread_mutex_unlock(&mutex);
+
             LOG_MSG("Client closed");
         break;
         case CLIENT_AGAIN:
@@ -389,7 +319,7 @@ void dispatch_client(int client_socket)
         return;
     }
 
-	if(send_message(workers[index].socket, (const char*)&client_socket, sizeof(int)) == -1)
+	if(send(workers[index].socket, (const char*)&client_socket, sizeof(int), 0) == -1)
     {
         LOG_ERROR("Can't send the socket to thread");
         close(workers[index].socket);
@@ -453,7 +383,7 @@ void signal_handler(int sign_nr)
             if(clients_connected[i] != -1)
 			{
                 int msg = -1;
-    			send_message(workers[i].socket, (const char*)&msg, sizeof(int));
+    			send(workers[i].socket, (const char*)&msg, sizeof(int), 0);
     			pthread_join(workers[i].thread_handle, NULL);
             }
 		}

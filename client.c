@@ -27,6 +27,8 @@
 #endif 
 
 #define IP "127.0.0.1"
+#define PORT 8090
+#define MAX_IP_LEN 256
 
 #ifdef __linux__
 #define LOG_ERROR(message) \
@@ -38,23 +40,70 @@
 
 #define BUFFER_SIZE 1024 * 32
 
-struct command
-{
-	char args[1024];
-	int index;
-};
-
 struct file_info
 {
 	off_t file_size;
 	int file_type;
 };
 
+struct login_args
+{
+	int cmd_index;
+	char username[30];
+	char password[30];
+};
+
+struct send_file_args
+{
+	int cmd_index;
+	char file_path[256];
+};
+
+struct response
+{
+	int ok;
+};
+
+int login(int socket)
+{
+	struct login_args credentials;
+
+	strcpy(credentials.username, "admin");
+	strcpy(credentials.password, "admin");
+	credentials.cmd_index = 1;
+
+	send(socket, &credentials, sizeof(credentials), 0);
+
+	struct response resp;
+
+	recv(socket, &resp, sizeof(resp), 0);
+
+	return resp.ok;
+}
+
 int main(int argc, char* argv[])
 {
 
-	printf("%ld\n", sizeof(off_t));
-#ifdef _WIN32
+	char ip[MAX_IP_LEN] = IP;
+	unsigned short port = PORT;
+
+	port = PORT;
+	if(argc > 1)
+	{
+		strcpy(ip, argv[1]);
+	}
+
+	if(strcmp(ip, "localhost") == 0)
+	{
+		strcpy(ip, "127.0.0.1");
+	}
+
+	if(argc > 2)
+	{
+		port = (unsigned short)atoi(argv[2]);
+	}
+
+	#ifdef _WIN32
 	WSADATA wsaData;
 
 	int result = WSAStartup(MAKEWORD(2,2), &wsaData);
@@ -96,17 +145,15 @@ int main(int argc, char* argv[])
     	return -1;
     }
 
+    login(server_socket);
+
     char buffer[BUFFER_SIZE];
 
-    recv(server_socket, buffer, BUFFER_SIZE, 0);
+    struct send_file_args cmd;
 
-    printf("%s\n", buffer);
-
-
-    struct command cmd;
-
-    cmd.index = 0;
-    strcpy(cmd.args, "test.rar");
+    printf("Insert command: \n");
+    scanf("%d", &cmd.cmd_index);
+    scanf("%s", cmd.file_path);
 
     send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
 
@@ -165,6 +212,7 @@ int main(int argc, char* argv[])
     }
 
     CloseHandle(fd);
+
     closesocket(server_socket);
 
 #ifdef _WIN32

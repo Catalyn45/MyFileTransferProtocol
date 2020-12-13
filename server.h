@@ -2,7 +2,6 @@
 #define SERVER_H
 
 #include "types.h"
-#include "server_commands.h"
 #include <pthread.h>
 #include <signal.h>
 #include <sys/select.h>
@@ -43,18 +42,14 @@ int insert_client(struct slisthead* clients, struct entry client);
 
 void delete_command(struct entry* client);
 
-int send_message(int socket, const char* message, int len);
-int recv_message(int socket, char* buffer, int expected_len);
-
-enum client_result socket_read(struct entry* client);
-enum client_result socket_write(struct entry* client);
+enum client_result handle_event(struct entry* client, enum client_events event);
 
 void exit_thread(struct slisthead* clients, int index);
 
 void dispatch_client(int client_socket);
 void* handle_client(void* args);
 
-enum client_result execute_command(struct entry* client);
+enum client_result execute_command(struct entry* client, enum client_events event);
 
 void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result);
 
