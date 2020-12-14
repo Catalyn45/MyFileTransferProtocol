@@ -27,7 +27,7 @@
 #endif 
 
 #define IP "127.0.0.1"
-#define PORT 8090
+#define PORT 8089
 #define MAX_IP_LEN 256
 
 #ifdef __linux__
@@ -66,17 +66,29 @@ struct response
 
 int login(int socket)
 {
-	struct login_args credentials;
-
-	strcpy(credentials.username, "admin");
-	strcpy(credentials.password, "admin");
-	credentials.cmd_index = 1;
-
-	send(socket, &credentials, sizeof(credentials), 0);
-
 	struct response resp;
 
-	recv(socket, &resp, sizeof(resp), 0);
+	struct login_args credentials;
+
+	do
+	{
+		printf("username: ");
+		scanf("%s", credentials.username);
+		printf("\npassword: ");
+		scanf("%s", credentials.password);
+
+		credentials.cmd_index = 1;
+
+		send(socket, &credentials, sizeof(credentials), 0);
+
+		recv(socket, &resp, sizeof(resp), 0);
+
+		if(resp.ok != 1)
+			printf("\n\nLogin failed\n\n");
+		else
+			printf("\n\nLogin success\n\n");
+
+	}while(resp.ok != 1);
 
 	return resp.ok;
 }
@@ -119,13 +131,13 @@ int main(int argc, char* argv[])
     memset(&server_address, 0, sizeof(server_address));
 
     server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(8089);
+    server_address.sin_port = htons(port);
 
 #ifdef _WIN32
     SOCKET server_socket;
-    server_address.sin_addr.s_addr = inet_addr(IP);
+    server_address.sin_addr.s_addr = inet_addr(ip);
 #elif __linux__
-    inet_pton(AF_INET, IP, &(server_address.sin_addr));
+    inet_pton(AF_INET, ip, &(server_address.sin_addr));
     int server_socket;
 #endif
 
@@ -140,6 +152,8 @@ int main(int argc, char* argv[])
 
     if(connect(server_socket, (const struct sockaddr*)&server_address, sizeof(server_address)) < 0)
     {
+    	printf("%s\n", ip);
+    	printf("%d\n", port);
     	LOG_ERROR("Error at connect");
     	closesocket(server_socket);
     	return -1;

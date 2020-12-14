@@ -194,41 +194,45 @@ void* handle_client(void* args)
                 return NULL;
             }
 
-            FD_SET(socket_to_add, &read_fd);   
+            FD_SET(socket_to_add, &read_fd); 
+            count--;  
         }
-        else
+
+        struct entry* it;
+        int socket;
+
+        SLIST_FOREACH(it, &clients, entries)
         {
-            struct entry* it;
-            int socket;
+            if(count == 0)
+                break;
 
-            SLIST_FOREACH(it, &clients, entries)
+            socket = it->data.socket;
+            enum client_result result = CLIENT_ERROR;
+
+            if(FD_ISSET(socket, &copy_read_fd))
             {
-                socket = it->data.socket;
-                enum client_result result = CLIENT_ERROR;
-
-                if(FD_ISSET(socket, &copy_read_fd))
-                {
-                    result = handle_event(it, EVENT_READ);
-                }
-                else if(FD_ISSET(socket, &copy_write_fd))
-                {
-                    result = handle_event(it, EVENT_WRITE);
-                }
-                else
-                {
-                    continue;
-                }
-
-                handle_result(it, &clients, main_thread.index, result);
-
-                if((result == CLIENT_CLOSED || result == CLIENT_ERROR) && SLIST_EMPTY(&clients))
-                {
-                    LOG_MSG("no clients, closing the thread");
-                    exit_thread(&clients, main_thread.index);
-                    pthread_detach(workers[main_thread.index].thread_handle);
-                    return NULL;
-                }
+                result = handle_event(it, EVENT_READ);
             }
+            else if(FD_ISSET(socket, &copy_write_fd))
+            {
+                result = handle_event(it, EVENT_WRITE);
+            }
+            else
+            {
+                continue;
+            }
+
+            handle_result(it, &clients, main_thread.index, result);
+
+            if((result == CLIENT_CLOSED || result == CLIENT_ERROR) && SLIST_EMPTY(&clients))
+            {
+                LOG_MSG("no clients, closing the thread");
+                exit_thread(&clients, main_thread.index);
+                pthread_detach(workers[main_thread.index].thread_handle);
+                return NULL;
+            }
+
+            count--;
         }
     }
 
