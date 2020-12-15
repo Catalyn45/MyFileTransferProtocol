@@ -1,0 +1,1 @@
+gcc main.c -o client.exe -lws2_32 -Os

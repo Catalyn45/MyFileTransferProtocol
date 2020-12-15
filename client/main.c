@@ -39,6 +39,9 @@
     printf("%s\nError nr: %d\n\n", message, GetLastError())
 #endif
 
+#define LOG_MSG(message) \
+    printf("%s\n", message)
+
 #define LENGTH_OF(x) sizeof(x) / sizeof(*(x))
 
 #define BUFFER_SIZE 1024 * 32
@@ -55,7 +58,7 @@ struct response
 	int ok;
 };
 
-int login(int socket)
+int login(SOCKET socket)
 {
 	struct response resp;
 
@@ -64,15 +67,43 @@ int login(int socket)
 	do
 	{
 		printf("username: ");
-		scanf("%s", credentials.username);
+		if(scanf("%s", credentials.username) <= 0)
+		{
+			LOG_ERROR("Error at getting the username");
+			return -1;
+		}
+		
 		printf("\npassword: ");
-		scanf("%s", credentials.password);
+
+		if(scanf("%s", credentials.password) <= 0)
+		{
+			LOG_ERROR("Error at getting the password");
+			return -1;
+		}
 
 		credentials.cmd_index = 1;
 
-		send(socket, &credentials, sizeof(credentials), 0);
+		int result = send(socket, (const char*)&credentials, sizeof(credentials), 0);
 
-		recv(socket, &resp, sizeof(resp), 0);
+		if(result == -1)
+		{
+			LOG_ERROR("Error at sending credentials");
+			return -1;
+		}
+
+		result = recv(socket, (char*)&resp, sizeof(resp), 0);
+
+		if(result == 0)
+		{
+			LOG_MSG("Server closed connection");
+			return -1;
+		}
+
+		if(result < 0)
+		{
+			LOG_ERROR("Error at receiving response from server");
+			return -1;
+		}
 
 		if(resp.ok != 1)
 			printf("\n\nLogin failed\n\n");
@@ -103,21 +134,59 @@ int receive_file(SOCKET server_socket)
     struct send_file_args cmd;
 
     cmd.cmd_index = 2;
-    scanf("%s", cmd.file_path); 
 
-    send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
+    if(scanf("%s", cmd.file_path) <= 0)
+    {
+    	LOG_ERROR("Error at getting the file path");
+    	return -1;
+    } 
+
+    int result = send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
+
+    if(result == 0)
+    {
+    	LOG_MSG("Server closed");
+    	return -1;
+    }
+
+    if(result < 0)
+    {
+    	LOG_ERROR("Error at receiving from server");
+    	return -1;
+    }
 
     struct file_info fi;
 
- 	recv(server_socket, (char*)&fi, sizeof(fi), 0);
+ 	result = recv(server_socket, (char*)&fi, sizeof(fi), 0);
+
+	if(result == 0)
+    {
+    	LOG_MSG("Server closed");
+    	return -1;
+    }
+
+    if(result < 0)
+    {
+    	LOG_ERROR("Error at receiving from server");
+    	return -1;
+    }
 
  	char nume_fisier[256];
 
- 	printf("Dai numele cum sa se salveze fisieru, fara extensie ca ii pun eu\n");
- 	scanf("%s", nume_fisier);
+ 	if(scanf("%s", nume_fisier) <= 0)
+ 	{
+ 		LOG_ERROR("Error at getting the file name");
+ 		return -1;
+ 	}
 
 #ifdef __linux__
- 	int fd = open(nume_fisier, O_CREAT | O_WRONLY);
+ 	int fd = open(nume_fisier, O_RDWR | O_CREAT, S_IRWXU);
+
+ 	if(fd == -1)
+ 	{
+ 		LOG_ERROR("Error at opening the file");
+ 		return -1;
+ 	}
 #elif _WIN32
  	HANDLE fd = CreateFileA(
  			nume_fisier,
@@ -128,6 +197,11 @@ int receive_file(SOCKET server_socket)
  			FILE_ATTRIBUTE_NORMAL,
  			NULL
  		);
+ 	if(fd == INVALID_HANDLE_VALUE)
+ 	{
+ 		LOG_ERROR("Error at opening the file");
+ 		return -1;
+ 	}
 #endif
 
  	unsigned long tm = (unsigned long)time(NULL);
@@ -136,7 +210,7 @@ int receive_file(SOCKET server_socket)
 
     while(fi.file_size > 0)
     {
-    	if((unsigned long)time(NULL) - tm >= 1)
+    	if((unsigned long)time(NULL) - tm >= 1 || initial_size == fi.file_size)
     	{
     		tm = (unsigned long)time(NULL);
 
@@ -151,20 +225,46 @@ int receive_file(SOCKET server_socket)
     	}
 
     	int len = recv(server_socket, buffer, BUFFER_SIZE, 0);
+
+    	if(len == 0)
+	    {
+	    	LOG_MSG("Server closed");
+	    	goto close_file;
+	    }
+
+	    if(len < 0)
+	    {
+	    	LOG_ERROR("Error at receiving from server");
+	    	goto close_file;
+	    }
+
 #ifdef __linux__
-    	write(fd, buffer, len);
+    	if(write(fd, buffer, len) <= 0)
+
 #elif _WIN32
     	DWORD back;
-    	WriteFile(fd, buffer, len, &back, NULL);
+    	if(WriteFile(fd, buffer, len, &back, NULL) == 0)
 #endif
+    	{
+    		LOG_ERROR("Error at writing in file");
+    		goto close_file;
+    	}
     	fi.file_size -= len;
     }
 
+    printf("Downloaded: 100%%\n");
+
     CloseHandle(fd);
+    return 0;
+
+close_file:
+	CloseHandle(fd);
+
+	return -1;
 
 }
 
-typedef int (*server_func)(int);
+typedef int (*server_func)(SOCKET socket);
 
 server_func functions[] =  
 {
@@ -205,7 +305,6 @@ int parse_command(const char* command)
 
 int main(int argc, char* argv[])
 {
-
 	char ip[MAX_IP_LEN] = IP;
 	unsigned short port = PORT;
 
@@ -229,6 +328,7 @@ int main(int argc, char* argv[])
 	WSADATA wsaData;
 
 	int result = WSAStartup(MAKEWORD(2,2), &wsaData);
+
     if (result != 0)
     {
         LOG_ERROR("Error at wsaStartup");
@@ -271,18 +371,33 @@ int main(int argc, char* argv[])
 
     char current_command[256];
 
-    printf("Insert command: \n");
-    scanf("%s", current_command);
+    while(1)
+    {
+    	printf("Insert command: ");
+	    if(scanf("%s", current_command) <= 0)
+	    {
+	    	LOG_ERROR("Error at getting the command");
+	    	goto close_client;
+	    }
 
-    int cmd_index = parse_command(current_command);
+	    printf("\n");
 
-    if(cmd_index == -1)
-    	return -1;
+	    int cmd_index = parse_command(current_command);
 
-    int result = execute_command(cmd_index, server_socket);
+	    if(cmd_index == -1)
+	    {
+	    	LOG_MSG("Error at parsing the command");
+	    	goto close_client;
+	    }
 
-    if(result == -1)
-    	return -1;
+	    int result = execute_command(cmd_index, server_socket);
+
+	    if(result == -1)
+	    {
+	    	LOG_MSG("Error at executing the command");
+	    	goto close_client;
+	    }
+	}
 
     closesocket(server_socket);
 
@@ -291,4 +406,12 @@ int main(int argc, char* argv[])
 #endif
 
 	return 0;
+
+close_client:
+	closesocket(server_socket);
+
+#ifdef _WIN32
+    WSACleanup();
+#endif
+    return -1;
 }

@@ -26,7 +26,7 @@ server_commands_d.o: server_commands.c
 	$(CC) -c -DDEBUG $(CFLAGS_WARNINGS) -g server_commands.c -o server_commands_d.o
 clean:
 	find . -name "*.o" -type f -delete
-	find . -name "ftp_server" -type f -delete
+	find . -name "ftp_server*" -type f -delete
 
 all: ftp_server
 
