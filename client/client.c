@@ -6,6 +6,7 @@
 #define SOCK_ERROR -1
 #define closesocket close
 #define CloseHandle close
+#define SOCKET int
 #include <sys/select.h>
 #include <string.h>
 #include <sys/types.h>
@@ -38,25 +39,15 @@
     printf("%s\nError nr: %d\n\n", message, GetLastError())
 #endif
 
-#define BUFFER_SIZE 1024 * 32
+#define LENGTH_OF(x) sizeof(x) / sizeof(*(x))
 
-struct file_info
-{
-	off_t file_size;
-	int file_type;
-};
+#define BUFFER_SIZE 1024 * 32
 
 struct login_args
 {
 	int cmd_index;
 	char username[30];
 	char password[30];
-};
-
-struct send_file_args
-{
-	int cmd_index;
-	char file_path[256];
 };
 
 struct response
@@ -93,81 +84,26 @@ int login(int socket)
 	return resp.ok;
 }
 
-int main(int argc, char* argv[])
+struct send_file_args
 {
+	int cmd_index;
+	char file_path[256];
+};
 
-	char ip[MAX_IP_LEN] = IP;
-	unsigned short port = PORT;
+struct file_info
+{
+	off_t file_size;
+	int file_type;
+};
 
-	port = PORT;
-	if(argc > 1)
-	{
-		strcpy(ip, argv[1]);
-	}
-
-	if(strcmp(ip, "localhost") == 0)
-	{
-		strcpy(ip, "127.0.0.1");
-	}
-
-	if(argc > 2)
-	{
-		port = (unsigned short)atoi(argv[2]);
-	}
-
-	#ifdef _WIN32
-	WSADATA wsaData;
-
-	int result = WSAStartup(MAKEWORD(2,2), &wsaData);
-    if (result != 0)
-    {
-        LOG_ERROR("Error at wsaStartup");
-        return 1;
-    }
-#endif
-
-	struct sockaddr_in server_address;
-    
-    memset(&server_address, 0, sizeof(server_address));
-
-    server_address.sin_family = AF_INET;
-    server_address.sin_port = htons(port);
-
-#ifdef _WIN32
-    SOCKET server_socket;
-    server_address.sin_addr.s_addr = inet_addr(ip);
-#elif __linux__
-    inet_pton(AF_INET, ip, &(server_address.sin_addr));
-    int server_socket;
-#endif
-
-    server_socket = socket(AF_INET, SOCK_STREAM, 0);
-
-    if (server_socket == SOCK_ERROR)
-    {
-        LOG_ERROR("Eroare la creare socket");
-        return -1;
-    }
-
-
-    if(connect(server_socket, (const struct sockaddr*)&server_address, sizeof(server_address)) < 0)
-    {
-    	printf("%s\n", ip);
-    	printf("%d\n", port);
-    	LOG_ERROR("Error at connect");
-    	closesocket(server_socket);
-    	return -1;
-    }
-
-    login(server_socket);
-
-    char buffer[BUFFER_SIZE];
+int receive_file(SOCKET server_socket)
+{
+	char buffer[BUFFER_SIZE];
 
     struct send_file_args cmd;
 
-    printf("Insert command: \n");
-    scanf("%d", &cmd.cmd_index);
-    scanf("%s", cmd.file_path);
+    cmd.cmd_index = 2;
+    scanf("%s", cmd.file_path); 
 
     send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
 
@@ -179,7 +115,6 @@ int main(int argc, char* argv[])
 
  	printf("Dai numele cum sa se salveze fisieru, fara extensie ca ii pun eu\n");
  	scanf("%s", nume_fisier);
- 	strcat(nume_fisier, ".rar");
 
 #ifdef __linux__
  	int fd = open(nume_fisier, O_CREAT | O_WRONLY);
@@ -226,6 +161,128 @@ int main(int argc, char* argv[])
     }
 
     CloseHandle(fd);
+
+}
+
+typedef int (*server_func)(int);
+
+server_func functions[] =  
+{
+	NULL,
+	login,
+	receive_file
+};
+
+unsigned int functions_number = LENGTH_OF(functions);
+
+int execute_command(unsigned int index, SOCKET socket)
+{
+	if(index == 0)
+		return -1;
+
+	if(index >= functions_number)
+		return -1;
+
+	return functions[index](socket);
+}
+
+int parse_command(const char* command)
+{
+	static const char* commands[] = {
+		NULL,
+		"login",
+		"get_file"
+	};
+
+	for(unsigned int i = 1; i < LENGTH_OF(commands); i++)
+	{
+		if(strcmp(command, commands[i]) == 0)
+			return i;
+	}
+
+	return -1;
+}
+
+int main(int argc, char* argv[])
+{
+
+	char ip[MAX_IP_LEN] = IP;
+	unsigned short port = PORT;
+
+	port = PORT;
+	if(argc > 1)
+	{
+		strcpy(ip, argv[1]);
+	}
+
+	if(strcmp(ip, "localhost") == 0)
+	{
+		strcpy(ip, "127.0.0.1");
+	}
+
+	if(argc > 2)
+	{
+		port = (unsigned short)atoi(argv[2]);
+	}
+
+	#ifdef _WIN32
+	WSADATA wsaData;
+
+	int result = WSAStartup(MAKEWORD(2,2), &wsaData);
+    if (result != 0)
+    {
+        LOG_ERROR("Error at wsaStartup");
+        return 1;
+    }
+#endif
+
+	struct sockaddr_in server_address;
+    
+    memset(&server_address, 0, sizeof(server_address));
+
+    server_address.sin_family = AF_INET;
+    server_address.sin_port = htons(port);
+    SOCKET server_socket;
+#ifdef _WIN32
+    server_address.sin_addr.s_addr = inet_addr(ip);
+#elif __linux__
+    inet_pton(AF_INET, ip, &(server_address.sin_addr));
+#endif
+
+    server_socket = socket(AF_INET, SOCK_STREAM, 0);
+
+    if (server_socket == SOCK_ERROR)
+    {
+        LOG_ERROR("Eroare la creare socket");
+        return -1;
+    }
+
+
+    if(connect(server_socket, (const struct sockaddr*)&server_address, sizeof(server_address)) < 0)
+    {
+    	printf("%s\n", ip);
+    	printf("%d\n", port);
+    	LOG_ERROR("Error at connect");
+    	closesocket(server_socket);
+    	return -1;
+    }
+
+    login(server_socket);
+
+    char current_command[256];
+
+    printf("Insert command: \n");
+    scanf("%s", current_command);
+
+    int cmd_index = parse_command(current_command);
+
+    if(cmd_index == -1)
+    	return -1;
+
+    int result = execute_command(cmd_index, server_socket);
+
+    if(result == -1)
+    	return -1;
 
     closesocket(server_socket);
 
