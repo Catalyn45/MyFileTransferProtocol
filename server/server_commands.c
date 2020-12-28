@@ -27,12 +27,12 @@ int get_command_new(struct entry* client)
 
 enum client_result get_command(struct entry* client, enum client_events event)
 {
+	(void) event;
+
+	struct command_args* args = client->data.args;
+
 	if(event == EVENT_READ)
 	{
-		(void) event;
-
-		struct command_args* args = client->data.args;
-
 		int len = recv(client->data.socket, (&args->command_index) + args->buf_size, sizeof(int) - args->buf_size, 0);
 
 		if(len == -1)
@@ -60,16 +60,23 @@ void get_command_free(struct entry* client)
 struct transfer_info
 {
 	int file_descriptor;
-    char buffer[DATA_TRANSFER_CHUNK];
+    data_type data;
     int read_len;
 	int state;
 };
 
 struct file_info
 {
+	int ok;
 	off_t file_size;
 	int file_type;
 };
+
+struct data_type
+{
+	int ok;
+	char buffer[DATA_TRANSFER_CHUNK];
+}
 
 struct file_send_args
 {

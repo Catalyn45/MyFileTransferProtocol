@@ -13,7 +13,7 @@ int server;
 SLIST_HEAD(slisthead, entry);
 
 //Mutex for thread syncronization
-pthread_mutex_t mutex;// = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex;
 
 //Global array where we put how many clients every thread have
 int clients_connected[MAX_THREADS];
@@ -52,6 +52,7 @@ void* handle_client(void* args);
 enum client_result execute_command(struct entry* client, enum client_events event);
 
 void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result);
+enum client_result handle_error(struct entry* client, enum client_events event);
 
 int init_thread(struct worker_type* workers, int index);
 int setup_server();

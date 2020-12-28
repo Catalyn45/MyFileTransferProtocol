@@ -9,6 +9,11 @@ struct command_args
     int buf_size;
 };
 
+void delete_error(struct entry* client)
+{
+    free(client->data.error.buffer);
+}
+
 void delete_command(struct entry* client)
 {
     client->data.current_command.cmd_state = COMMAND_NONE;
@@ -28,6 +33,8 @@ void delete_command(struct entry* client)
 
     if(commands_list[index].free != NULL)
         commands_list[index].free(client);
+
+    delete_error(client);
     
     client->data.args = NULL;
 }
@@ -40,6 +47,7 @@ void delete_client(struct entry* it, struct slisthead* clients)
     FD_CLR(it->data.socket, it->data.write);
 
     delete_command(it);
+
     free(it);
 }
 
@@ -101,6 +109,97 @@ int insert_client(struct slisthead* clients, struct entry client)
     return 0;
 }
 
+enum client_result handle_error(struct entry* client, enum client_events event)
+{
+    struct error_type* cmd_error = &client->data.error;
+
+    if(event == EVENT_READ)
+    {
+        if(cmd_error->state == 0)
+        {
+            int result = recv(client->data.socket, &cmd_error->error_length + cmd_error->error_size, sizeof(int) - cmd_error->error_size, 0);
+
+            if(result == 0)
+                return CLIENT_CLOSED;
+
+            if(result == -1)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size += result;
+
+            if(cmd_error->error_size < sizeof(int))
+                return CLIENT_AGAIN;
+
+            if(cmd_error->error_length > MAX_ERROR_LENGTH)
+                return CLIENT_ERROR;
+            
+            cmd_error->buffer = calloc(1, cmd_error->error_length);
+
+            if(cmd_error == NULL)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size = 0;
+            cmd_error->state = 1;
+
+            return CLIENT_AGAIN;
+            
+        }
+
+        int result = recv(client->data.socket, cmd_error->buffer + cmd_error->error_size, cmd_error->error_length - cmd_error->error_size, 0);
+
+        if(result == -1)
+            return CLIENT_ERROR;
+
+        if(result == 0)
+            return CLIENT_CLOSED;
+
+        cmd_error->error_size += result;
+
+        if(cmd_error->error_size < cmd_error->error_length)
+            return CLIENT_AGAIN;
+
+        return CLIENT_SUCCESS;
+
+    }
+    else if(event == EVENT_WRITE)
+    {
+        if(cmd_error->state == 0)
+        {
+            struct error_info info = {-1, 0};
+            info.err_length = cmd_error->error_length;
+
+            int result = send(client->data.socket, &info + cmd_error->error_size, sizeof(struct error_info) - cmd_error->error_size, 0);
+
+            if(result == -1)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size += result;
+
+            if(cmd_error->error_size < sizeof(struct error_info))
+                return CLIENT_AGAIN;
+
+            cmd_error->error_size = 0;
+            cmd_error->state = 1;
+
+            return CLIENT_AGAIN;
+        }
+
+        int result = send(client->data.socket, cmd_error->buffer + cmd_error->error_size, cmd_error->error_length - cmd_error->error_size, 0);
+
+        if(result == -1)
+            return CLIENT_ERROR;
+
+        cmd_error->error_size += result;
+
+        if(cmd_error->error_size < cmd_error->error_length)
+            return CLIENT_AGAIN;
+
+        return CLIENT_SUCCESS;
+    }
+
+    return CLIENT_ERROR;
+}
+
 enum client_result handle_event(struct entry* client, enum client_events event)
 {
     switch(client->data.current_command.cmd_state)
@@ -109,6 +208,8 @@ enum client_result handle_event(struct entry* client, enum client_events event)
             return init_command(client);
         case COMMAND_READY:
             return execute_command(client, event);
+        case COMMAND_ERROR:
+            return handle_error(client, event);
         default:
             break;
     }

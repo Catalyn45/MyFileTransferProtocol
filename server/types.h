@@ -18,6 +18,7 @@
 #define SERVER_PORT 8089
 #define MAX_THREADS 2
 #define MAX_PATH 256
+#define MAX_ERROR_LENGTH 512
 
 #define LOG_ERROR(message) \
     printf("%s\n%s\nLine: %d\n\n", message, strerror(errno), __LINE__)
@@ -49,6 +50,7 @@ enum command_state
 {
 	COMMAND_NONE,
 	COMMAND_READY,
+	COMMAND_ERROR
 };
 
 enum security
@@ -64,6 +66,20 @@ struct command
 	unsigned int index;
 };
 
+struct error_info
+{
+	const int err_num;
+	int err_length;
+};
+
+struct error_type
+{
+	int state;
+	char* buffer;
+	unsigned int error_size;
+	unsigned int error_length;
+};
+
 // A structure shere we save all the informations about the clients
 struct client_info
 {
@@ -72,6 +88,7 @@ struct client_info
 	fd_set* read;
 	fd_set* write;
 	struct command current_command;
+	struct error_type error;
 	void* args;
 };
 
