@@ -63,6 +63,11 @@ enum security
 struct command
 {
 	enum command_state cmd_state;
+
+	int ok_finished;
+	int ok;
+	int ok_size;
+
 	unsigned int index;
 };
 

@@ -58,6 +58,12 @@ struct response
 	int ok;
 };
 
+struct error_type
+{
+	int length;
+	char* buffer;
+};
+
 int login(SOCKET socket)
 {
 	struct response resp;
@@ -157,6 +163,22 @@ int receive_file(SOCKET server_socket)
 
     struct file_info fi;
 
+    int ok = 0;
+
+ 	struct error_type error;
+
+ 	recv(server_socket, (char*)&ok, sizeof(ok), 0);
+
+ 	if(ok != 0)
+ 	{
+	 	recv(server_socket, &error.length, sizeof(error.length), 0);
+		error.buffer = malloc(error.length);
+		recv(server_socket, error.buffer, error.length, 0);
+		printf("%s\n", error.buffer);
+		free(error.buffer);
+		return 0;
+ 	}
+
  	result = recv(server_socket, (char*)&fi, sizeof(fi), 0);
 
 	if(result == 0)
@@ -223,6 +245,18 @@ int receive_file(SOCKET server_socket)
 #endif
     		last_bytes_remaining = fi.file_size;
     	}
+
+    	recv(server_socket, (char*)&ok, sizeof(ok), 0);
+
+	 	if(ok != 0)
+	 	{
+		 	recv(server_socket, &error.length, sizeof(error.length), 0);
+			error.buffer = malloc(error.length);
+			recv(server_socket, error.buffer, error.length, 0);
+			printf("%s\n", error.buffer);
+			free(error.buffer);
+			return 0;
+	 	}
 
     	int len = recv(server_socket, buffer, BUFFER_SIZE, 0);
 

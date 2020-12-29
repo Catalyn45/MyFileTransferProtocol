@@ -11,13 +11,21 @@ struct command_args
 
 void delete_error(struct entry* client)
 {
+    client->data.error.error_length = 0;
+    client->data.error.error_size = 0;
+    client->data.error.state = 0;
     free(client->data.error.buffer);
+    client->data.error.buffer = NULL;
 }
 
 void delete_command(struct entry* client)
 {
     client->data.current_command.cmd_state = COMMAND_NONE;
 
+    client->data.current_command.ok_finished = 0;
+    client->data.current_command.ok_size = 0;
+    client->data.current_command.ok = 0;
+    
     if(client->data.args == NULL)
         return;
 
@@ -36,6 +44,7 @@ void delete_command(struct entry* client)
 
     delete_error(client);
     
+    free(client->data.args);
     client->data.args = NULL;
 }
 
