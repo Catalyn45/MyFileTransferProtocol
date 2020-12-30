@@ -20,6 +20,8 @@
 #define MAX_PATH 256
 #define MAX_ERROR_LENGTH 512
 
+#define ACCOUNTS_FILE "accounts.conf"
+
 #define LOG_ERROR(message) \
     printf("%s\n%s\nLine: %d\n\n", message, strerror(errno), __LINE__)
 
@@ -107,6 +109,7 @@ struct entry
 typedef enum client_result(*client_fun_type)(struct entry* client, enum client_events event);
 typedef void (*client_free_type)(struct entry* client);
 typedef int (*client_new_type)(struct entry* client);
+int set_error(struct entry* client, const char* message);
 
 struct client_function
 {

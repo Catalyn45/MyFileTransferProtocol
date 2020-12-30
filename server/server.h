@@ -3,6 +3,8 @@
 
 #include "types.h"
 #include <pthread.h>
+#include <sys/stat.h>
+#include <sys/mman.h>
 #include <signal.h>
 #include <sys/select.h>
 
@@ -10,9 +12,13 @@
 
 int server;
 
+extern struct client_function commands_list[];
+extern unsigned int max_cmds;
+
 SLIST_HEAD(slisthead, entry);
 
 //Mutex for thread syncronization
+char* accounts;
 pthread_mutex_t mutex;
 
 //Global array where we put how many clients every thread have
@@ -53,6 +59,8 @@ enum client_result execute_command(struct entry* client, enum client_events even
 
 void handle_result(struct entry* client, struct slisthead* clients, int index, enum client_result result);
 enum client_result handle_error(struct entry* client, enum client_events event);
+
+char* get_accounts(const char* filename);
 
 int init_thread(struct worker_type* workers, int index);
 int setup_server();

@@ -8,19 +8,6 @@ struct client_function commands_list[] = {
 
 unsigned int max_cmds = LENGTH_OF(commands_list);
 
-int set_error(struct entry* client, const char* message)
-{
-	client->data.current_command.cmd_state = COMMAND_ERROR;
-
-	client->data.error.buffer = strdup(message);
-	client->data.error.error_length = strlen(message) + 1;
-
-	if(client->data.error.buffer == NULL)
-		return -1;
-
-	return 0;
-}
-
 int get_ok(struct entry* client)
 {
 	struct command* cmd = &client->data.current_command;
@@ -296,16 +283,10 @@ struct user_pass
 	char password[30];
 };
 
-struct login_response
-{
-	int ok;
-};
-
 struct login_args
 {
 	int buf_size;
 	struct user_pass credentials;
-	struct login_response response;
 };
 
 int login_new(struct entry* client)
@@ -342,7 +323,10 @@ enum client_result login(struct entry* client, enum client_events event)
 			if(strcmp(args->credentials.username, username) == 0 && strcmp(args->credentials.password, password) == 0)
 			{
 				client->data.client_security = SECURITY_CONNECTED;
-				args->response.ok = 1;
+			}
+			else
+			{
+				set_error(client, "Wrong credentials");
 			}
 
 			args->buf_size = 0;
@@ -352,17 +336,17 @@ enum client_result login(struct entry* client, enum client_events event)
 
 	if(event == EVENT_WRITE)
 	{
-		int len = send(client->data.socket, &args->response + args->buf_size, sizeof(args->response) - args->buf_size, 0);
+		struct command* cmd = &client->data.current_command;
 
-		if(len == -1)
-		{
-			return CLIENT_ERROR;
-		}
+    	if(!cmd->ok_finished)
+    	{
+    		if(send_ok(client) < 0)
+    			return CLIENT_ERROR;
+    		return CLIENT_AGAIN;
+    	}
 
-		args->buf_size += len;
-
-		if(args->buf_size == sizeof(args->response))
-			return CLIENT_SUCCESS;
+    	cmd->ok_finished = 0;
+    	return CLIENT_SUCCESS;
 	}
 
 	return CLIENT_ERROR;

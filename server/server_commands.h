@@ -5,6 +5,9 @@
 
 #define DATA_TRANSFER_CHUNK 1024 * 32
 
+extern char* accounts;
+extern pthread_mutex_t mutex;
+
 int send_file_new(struct entry* client);
 enum client_result send_file(struct entry* client, enum client_events event);
 void send_file_free(struct entry* client);

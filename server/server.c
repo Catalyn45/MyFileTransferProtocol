@@ -1,8 +1,40 @@
 #include "server.h"
 
-extern struct client_function commands_list[];
-extern unsigned int max_cmds;
+char* get_accounts(const char* filename)
+{
+    int fd = open(filename, O_RDWR);
 
+    if(fd == -1)
+    {
+        LOG_ERROR("Error at openning accounts file");
+        goto free_file;
+    }
+
+    struct stat sb;
+
+    if(fstat(fd, &sb) == -1)
+    {
+        LOG_ERROR("Error at getting accounts file size");
+        goto free_file;
+    }
+
+    char* mapped_memory = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+
+    if(mapped_memory == MAP_FAILED)
+    {
+        LOG_ERROR("Error at mapping accounts file");
+        goto free_file;
+    }
+
+    close(fd);
+
+    return mapped_memory;
+
+free_file:
+    close(fd);
+    return NULL;
+
+}
 struct command_args
 {
     int command_index;
@@ -25,24 +57,24 @@ void delete_command(struct entry* client)
     client->data.current_command.ok_finished = 0;
     client->data.current_command.ok_size = 0;
     client->data.current_command.ok = 0;
-    
-    if(client->data.args == NULL)
-        return;
+
+    delete_error(client);
 
     unsigned int index = client->data.current_command.index;
+
+    client->data.current_command.index = 0;
+
+     if(client->data.args == NULL)
+        return;
 
     if(index == 0)
     {
         struct command_args* args = client->data.args;
         client->data.current_command.index = args->command_index;
     }
-    else
-        client->data.current_command.index = 0;
 
-    if(commands_list[index].free != NULL)
+    if(index < max_cmds && commands_list[index].free != NULL)
         commands_list[index].free(client);
-
-    delete_error(client);
     
     free(client->data.args);
     client->data.args = NULL;
@@ -76,6 +108,19 @@ enum client_result execute_command(struct entry* client, enum client_events even
     return commands_list[cmd->index].work(client, event);
 }
 
+int set_error(struct entry* client, const char* message)
+{
+    client->data.current_command.cmd_state = COMMAND_ERROR;
+
+    client->data.error.buffer = strdup(message);
+    client->data.error.error_length = strlen(message) + 1;
+
+    if(client->data.error.buffer == NULL)
+        return -1;
+
+    return 0;
+}
+
 enum client_result init_command(struct entry* client)
 {
     if(client == NULL)
@@ -87,7 +132,16 @@ enum client_result init_command(struct entry* client)
         return CLIENT_ERROR;
 
     if(cmd->index >= max_cmds)
-        return CLIENT_ERROR;
+    {
+        set_error(client, "Invalid command index");
+        return CLIENT_WANT_WRITE;
+    }
+
+    if (client->data.client_security < commands_list[cmd->index].function_security)
+    {
+        set_error(client, "You do not have permission to use that command");
+        return CLIENT_WANT_WRITE;
+    }
 
     if(commands_list[cmd->index].new == NULL)
         return CLIENT_WANT_READ;
@@ -559,6 +613,15 @@ int setup_server()
 
 int run()
 {
+
+    accounts = get_accounts(ACCOUNTS_FILE);
+
+    if(accounts == NULL)
+    {
+        LOG_ERROR("Error at get_accounts");
+        return -1;
+    }
+
     if(signal(SIGINT, signal_handler) == SIG_ERR)
     {
     	LOG_ERROR("Eroare la signal");

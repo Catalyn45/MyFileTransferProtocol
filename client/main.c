@@ -53,10 +53,6 @@ struct login_args
 	char password[30];
 };
 
-struct response
-{
-	int ok;
-};
 
 struct error_type
 {
@@ -64,11 +60,35 @@ struct error_type
 	char* buffer;
 };
 
+int is_ok(SOCKET socket)
+{
+	int ok = 0;
+
+	recv(socket, &ok, sizeof(ok), 0);
+
+	if(ok != 0)
+		return 0;
+
+	return 1;
+}
+
+int print_error(SOCKET socket)
+{
+	struct error_type error;
+
+	recv(socket, &error.length, sizeof(error.length), 0);
+	error.buffer = malloc(error.length);
+	recv(socket, error.buffer, error.length, 0);
+	printf("%s\n", error.buffer);
+	free(error.buffer);
+	return 0;
+}
+
 int login(SOCKET socket)
 {
-	struct response resp;
-
 	struct login_args credentials;
+
+	int ok;
 
 	do
 	{
@@ -97,28 +117,20 @@ int login(SOCKET socket)
 			return -1;
 		}
 
-		result = recv(socket, (char*)&resp, sizeof(resp), 0);
+		ok = is_ok(socket);
 
-		if(result == 0)
+		if(!ok)
 		{
-			LOG_MSG("Server closed connection");
-			return -1;
+			print_error(socket);
 		}
-
-		if(result < 0)
-		{
-			LOG_ERROR("Error at receiving response from server");
-			return -1;
-		}
-
-		if(resp.ok != 1)
-			printf("\n\nLogin failed\n\n");
 		else
+		{
 			printf("\n\nLogin success\n\n");
+		}
 
-	}while(resp.ok != 1);
+	}while(!ok);
 
-	return resp.ok;
+	return 0;
 }
 
 struct send_file_args
@@ -147,6 +159,14 @@ int receive_file(SOCKET server_socket)
     	return -1;
     } 
 
+ 	char nume_fisier[256];
+
+ 	if(scanf("%s", nume_fisier) <= 0)
+ 	{
+ 		LOG_ERROR("Error at getting the file name");
+ 		return -1;
+ 	}
+
     int result = send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
 
     if(result == 0)
@@ -161,24 +181,13 @@ int receive_file(SOCKET server_socket)
     	return -1;
     }
 
-    struct file_info fi;
-
-    int ok = 0;
-
- 	struct error_type error;
-
- 	recv(server_socket, (char*)&ok, sizeof(ok), 0);
-
- 	if(ok != 0)
- 	{
-	 	recv(server_socket, &error.length, sizeof(error.length), 0);
-		error.buffer = malloc(error.length);
-		recv(server_socket, error.buffer, error.length, 0);
-		printf("%s\n", error.buffer);
-		free(error.buffer);
+	if(!is_ok(server_socket))
+	{
+		print_error(server_socket);
 		return 0;
- 	}
+	}
 
+    struct file_info fi;
  	result = recv(server_socket, (char*)&fi, sizeof(fi), 0);
 
 	if(result == 0)
@@ -192,14 +201,6 @@ int receive_file(SOCKET server_socket)
     	LOG_ERROR("Error at receiving from server");
     	return -1;
     }
-
- 	char nume_fisier[256];
-
- 	if(scanf("%s", nume_fisier) <= 0)
- 	{
- 		LOG_ERROR("Error at getting the file name");
- 		return -1;
- 	}
 
 #ifdef __linux__
  	int fd = open(nume_fisier, O_RDWR | O_CREAT, S_IRWXU);
@@ -246,17 +247,12 @@ int receive_file(SOCKET server_socket)
     		last_bytes_remaining = fi.file_size;
     	}
 
-    	recv(server_socket, (char*)&ok, sizeof(ok), 0);
 
-	 	if(ok != 0)
-	 	{
-		 	recv(server_socket, &error.length, sizeof(error.length), 0);
-			error.buffer = malloc(error.length);
-			recv(server_socket, error.buffer, error.length, 0);
-			printf("%s\n", error.buffer);
-			free(error.buffer);
-			return 0;
-	 	}
+    	if(!is_ok(server_socket))
+    	{
+    		print_error(server_socket);
+    		return 0;
+    	}
 
     	int len = recv(server_socket, buffer, BUFFER_SIZE, 0);
 
@@ -325,12 +321,12 @@ int parse_command(const char* command)
 	static const char* commands[] = {
 		NULL,
 		"login",
-		"get_file"
+		"get_file",
 	};
 
 	for(unsigned int i = 1; i < LENGTH_OF(commands); i++)
 	{
-		if(strcmp(command, commands[i]) == 0)
+		if(strstr(command, commands[i]) != 0)
 			return i;
 	}
 
