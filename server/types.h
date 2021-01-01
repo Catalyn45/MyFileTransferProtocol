@@ -12,6 +12,8 @@
 #include <errno.h>
 #include <stdlib.h>
 #include <sys/queue.h>
+#include <pthread.h>
+#include <sys/mman.h>
 
 #define BACK_LOG 10
 #define MAX_ARGS_LEN 1024
@@ -21,6 +23,7 @@
 #define MAX_ERROR_LENGTH 512
 
 #define ACCOUNTS_FILE "accounts.conf"
+#define CLIENTS_DIRECTORY "clients_home"
 
 #define LOG_ERROR(message) \
     printf("%s\n%s\nLine: %d\n\n", message, strerror(errno), __LINE__)
@@ -30,13 +33,18 @@
 
 #define LENGTH_OF(x) sizeof(x) / sizeof(*(x))
 
+struct mapped_file
+{
+	char* buffer;
+	off_t length;
+};
+
 enum client_result
 {
     CLIENT_SUCCESS,
     CLIENT_WANT_READ,
     CLIENT_WANT_WRITE,
     CLIENT_AGAIN,
-    CLIENT_INVALID_COMMAND,
     CLIENT_ERROR,
     CLIENT_CLOSED
 };
@@ -95,6 +103,7 @@ struct client_info
 	fd_set* read;
 	fd_set* write;
 	struct command current_command;
+	char working_directory[MAX_PATH];
 	struct error_type error;
 	void* args;
 };
@@ -110,6 +119,7 @@ typedef enum client_result(*client_fun_type)(struct entry* client, enum client_e
 typedef void (*client_free_type)(struct entry* client);
 typedef int (*client_new_type)(struct entry* client);
 int set_error(struct entry* client, const char* message);
+struct mapped_file get_accounts(const char* filename);
 
 struct client_function
 {

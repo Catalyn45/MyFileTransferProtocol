@@ -1,7 +1,9 @@
 #include "server.h"
 
-char* get_accounts(const char* filename)
+struct mapped_file get_accounts(const char* filename)
 {
+    struct mapped_file mf;
+
     int fd = open(filename, O_RDWR);
 
     if(fd == -1)
@@ -28,11 +30,16 @@ char* get_accounts(const char* filename)
 
     close(fd);
 
-    return mapped_memory;
+    mf.buffer = mapped_memory;
+    mf.length = sb.st_size;
+
+    return mf;
 
 free_file:
     close(fd);
-    return NULL;
+    mf.buffer = NULL;
+    mf.length = 0;
+    return mf;
 
 }
 struct command_args
@@ -233,7 +240,7 @@ enum client_result handle_error(struct entry* client, enum client_events event)
 
             int result = send(client->data.socket, &info + cmd_error->error_size, sizeof(struct error_info) - cmd_error->error_size, 0);
 
-            if(result == -1)
+            if(result < 0)
                 return CLIENT_ERROR;
 
             cmd_error->error_size += result;
@@ -249,7 +256,7 @@ enum client_result handle_error(struct entry* client, enum client_events event)
 
         int result = send(client->data.socket, cmd_error->buffer + cmd_error->error_size, cmd_error->error_length - cmd_error->error_size, 0);
 
-        if(result == -1)
+        if(result < 0)
             return CLIENT_ERROR;
 
         cmd_error->error_size += result;
@@ -343,12 +350,12 @@ void* handle_client(void* args)
 
             LOG_MSG("Client connected");
 
-            struct entry client;
-            memset(&client, 0, sizeof(client));
+            struct entry client = { 0 };
 
             client.data.socket = socket_to_add;
             client.data.read = &read_fd;
             client.data.write = &write_fd;
+            strcpy(client.data.working_directory, CLIENTS_DIRECTORY);
             
             if(insert_client(&clients, client) == -1)
             {
@@ -542,6 +549,10 @@ void signal_handler(int sign_nr)
 
     pthread_mutex_destroy(&mutex);
 
+    LOG_MSG("Unmapping accounts file");
+
+    munmap(accounts.buffer, accounts.length);
+
 	if(sign_nr == SIGINT)
 	{
 		LOG_MSG("Closing all the clients...");
@@ -613,10 +624,9 @@ int setup_server()
 
 int run()
 {
-
     accounts = get_accounts(ACCOUNTS_FILE);
 
-    if(accounts == NULL)
+    if(accounts.length == 0 || accounts.buffer == NULL)
     {
         LOG_ERROR("Error at get_accounts");
         return -1;
