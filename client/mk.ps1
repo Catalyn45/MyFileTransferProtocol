@@ -1,1 +1,1 @@
-gcc main.c -o client.exe -lws2_32 -Os
+gcc main.c client_commands.c -o client.exe -pedantic -Wall -Wextra -Werror -Winline -lws2_32 -lShlwapi -Os

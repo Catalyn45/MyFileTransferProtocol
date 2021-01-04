@@ -17,7 +17,8 @@ SLIST_HEAD(slisthead, entry);
 
 //Mutex for thread syncronization
 struct mapped_file accounts;
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t mutex;
+extern pthread_mutex_t accounts_mutex;
 
 //Global array where we put how many clients every thread have
 int clients_connected[MAX_THREADS];

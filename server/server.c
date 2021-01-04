@@ -91,6 +91,10 @@ void delete_client(struct entry* it, struct slisthead* clients)
 {
 	SLIST_REMOVE(clients, it, entry, entries);
 	close(it->data.socket);
+    
+    free(it->data.username);
+    free(it->data.home_dir);
+
     FD_CLR(it->data.socket, it->data.read);
     FD_CLR(it->data.socket, it->data.write);
 
@@ -355,7 +359,21 @@ void* handle_client(void* args)
             client.data.socket = socket_to_add;
             client.data.read = &read_fd;
             client.data.write = &write_fd;
-            strcpy(client.data.working_directory, CLIENTS_DIRECTORY);
+
+            struct sockaddr_in address;
+            socklen_t address_size = sizeof(address);
+
+            int response = getpeername(socket_to_add, (struct sockaddr*)&address, &address_size);
+
+            if(response < 0)
+            {
+                LOG_ERROR("Error at getting peer name");
+                exit_thread(&clients, main_thread.index);
+                pthread_detach(workers[main_thread.index].thread_handle);
+                return NULL;
+            }
+
+            strcpy(client.data.ip, inet_ntoa(address.sin_addr));
             
             if(insert_client(&clients, client) == -1)
             {
@@ -364,6 +382,8 @@ void* handle_client(void* args)
                 pthread_detach(workers[main_thread.index].thread_handle);
                 return NULL;
             }
+
+            LOG_MSG(client.data.ip);
 
             FD_SET(socket_to_add, &read_fd); 
             count--;  
@@ -548,7 +568,7 @@ void signal_handler(int sign_nr)
 {
 
     pthread_mutex_destroy(&mutex);
-
+    pthread_mutex_destroy(&accounts_mutex);
     LOG_MSG("Unmapping accounts file");
 
     munmap(accounts.buffer, accounts.length);
@@ -579,9 +599,7 @@ void signal_handler(int sign_nr)
 
 int setup_server()
 {
-    struct sockaddr_in server_address;
-    
-    memset(&server_address, 0, sizeof(server_address));
+    struct sockaddr_in server_address = { 0 };
 
     server_address.sin_family = AF_INET;
     server_address.sin_port = htons(SERVER_PORT);
@@ -624,7 +642,15 @@ int setup_server()
 
 int run()
 {
+    pthread_mutex_init(&mutex, NULL);
+    pthread_mutex_init(&accounts_mutex, NULL);
     accounts = get_accounts(ACCOUNTS_FILE);
+
+    struct stat status;
+    if (stat(CLIENTS_DIRECTORY, &status) == -1)
+    {
+        mkdir(CLIENTS_DIRECTORY, 0700);
+    }
 
     if(accounts.length == 0 || accounts.buffer == NULL)
     {
