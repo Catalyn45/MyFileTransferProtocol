@@ -14,6 +14,10 @@
 #include <sys/queue.h>
 #include <pthread.h>
 #include <sys/mman.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <mbedtls/md5.h>
+#include <mbedtls/sha256.h>
 
 #define BACK_LOG 10
 #define MAX_ARGS_LEN 1024
@@ -26,7 +30,7 @@
 #define CLIENTS_DIRECTORY "clients_home"
 
 #define LOG_ERROR(message) \
-    printf("%s\n%s\nLine: %d\n\n", message, strerror(errno), __LINE__)
+    printf("%s\n%s\nLine: %d\nFile: %s\n\n", message, strerror(errno), __LINE__, __FILE__)
 
 #define LOG_MSG(message) \
     printf("%s\n", message)
@@ -103,7 +107,12 @@ struct client_info
 	fd_set* read;
 	fd_set* write;
 	struct command current_command;
+	char* username;
+	char* home_dir;
 	char working_directory[MAX_PATH];
+	int have_crypt_key;
+	unsigned char crypt_key[32];
+	char ip[20];
 	struct error_type error;
 	void* args;
 };
