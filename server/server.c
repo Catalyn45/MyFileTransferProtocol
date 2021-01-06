@@ -1,34 +1,89 @@
 #include "server.h"
 
-extern struct client_function commands_list[];
-extern unsigned int max_cmds;
+struct mapped_file get_accounts(const char* filename)
+{
+    struct mapped_file mf;
 
+    int fd = open(filename, O_RDWR);
+
+    if(fd == -1)
+    {
+        LOG_ERROR("Error at openning accounts file");
+        goto free_file;
+    }
+
+    struct stat sb;
+
+    if(fstat(fd, &sb) == -1)
+    {
+        LOG_ERROR("Error at getting accounts file size");
+        goto free_file;
+    }
+
+    char* mapped_memory = mmap(NULL, sb.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+
+    if(mapped_memory == MAP_FAILED)
+    {
+        LOG_ERROR("Error at mapping accounts file");
+        goto free_file;
+    }
+
+    close(fd);
+
+    mf.buffer = mapped_memory;
+    mf.length = sb.st_size;
+
+    return mf;
+
+free_file:
+    close(fd);
+    mf.buffer = NULL;
+    mf.length = 0;
+    return mf;
+
+}
 struct command_args
 {
     int command_index;
     int buf_size;
 };
 
+void delete_error(struct entry* client)
+{
+    client->data.error.error_length = 0;
+    client->data.error.error_size = 0;
+    client->data.error.state = 0;
+    free(client->data.error.buffer);
+    client->data.error.buffer = NULL;
+}
+
 void delete_command(struct entry* client)
 {
     client->data.current_command.cmd_state = COMMAND_NONE;
 
-    if(client->data.args == NULL)
-        return;
+    client->data.current_command.ok_finished = 0;
+    client->data.current_command.ok_size = 0;
+    client->data.current_command.ok = 0;
+
+    delete_error(client);
 
     unsigned int index = client->data.current_command.index;
+
+    client->data.current_command.index = 0;
+
+     if(client->data.args == NULL)
+        return;
 
     if(index == 0)
     {
         struct command_args* args = client->data.args;
         client->data.current_command.index = args->command_index;
     }
-    else
-        client->data.current_command.index = 0;
 
-    if(commands_list[index].free != NULL)
+    if(index < max_cmds && commands_list[index].free != NULL)
         commands_list[index].free(client);
     
+    free(client->data.args);
     client->data.args = NULL;
 }
 
@@ -40,6 +95,7 @@ void delete_client(struct entry* it, struct slisthead* clients)
     FD_CLR(it->data.socket, it->data.write);
 
     delete_command(it);
+
     free(it);
 }
 
@@ -59,6 +115,19 @@ enum client_result execute_command(struct entry* client, enum client_events even
     return commands_list[cmd->index].work(client, event);
 }
 
+int set_error(struct entry* client, const char* message)
+{
+    client->data.current_command.cmd_state = COMMAND_ERROR;
+
+    client->data.error.buffer = strdup(message);
+    client->data.error.error_length = strlen(message) + 1;
+
+    if(client->data.error.buffer == NULL)
+        return -1;
+
+    return 0;
+}
+
 enum client_result init_command(struct entry* client)
 {
     if(client == NULL)
@@ -70,7 +139,16 @@ enum client_result init_command(struct entry* client)
         return CLIENT_ERROR;
 
     if(cmd->index >= max_cmds)
-        return CLIENT_ERROR;
+    {
+        set_error(client, "Invalid command index");
+        return CLIENT_WANT_WRITE;
+    }
+
+    if (client->data.client_security < commands_list[cmd->index].function_security)
+    {
+        set_error(client, "You do not have permission to use that command");
+        return CLIENT_WANT_WRITE;
+    }
 
     if(commands_list[cmd->index].new == NULL)
         return CLIENT_WANT_READ;
@@ -101,6 +179,97 @@ int insert_client(struct slisthead* clients, struct entry client)
     return 0;
 }
 
+enum client_result handle_error(struct entry* client, enum client_events event)
+{
+    struct error_type* cmd_error = &client->data.error;
+
+    if(event == EVENT_READ)
+    {
+        if(cmd_error->state == 0)
+        {
+            int result = recv(client->data.socket, &cmd_error->error_length + cmd_error->error_size, sizeof(int) - cmd_error->error_size, 0);
+
+            if(result == 0)
+                return CLIENT_CLOSED;
+
+            if(result == -1)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size += result;
+
+            if(cmd_error->error_size < sizeof(int))
+                return CLIENT_AGAIN;
+
+            if(cmd_error->error_length > MAX_ERROR_LENGTH)
+                return CLIENT_ERROR;
+            
+            cmd_error->buffer = calloc(1, cmd_error->error_length);
+
+            if(cmd_error == NULL)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size = 0;
+            cmd_error->state = 1;
+
+            return CLIENT_AGAIN;
+            
+        }
+
+        int result = recv(client->data.socket, cmd_error->buffer + cmd_error->error_size, cmd_error->error_length - cmd_error->error_size, 0);
+
+        if(result == -1)
+            return CLIENT_ERROR;
+
+        if(result == 0)
+            return CLIENT_CLOSED;
+
+        cmd_error->error_size += result;
+
+        if(cmd_error->error_size < cmd_error->error_length)
+            return CLIENT_AGAIN;
+
+        return CLIENT_SUCCESS;
+
+    }
+    else if(event == EVENT_WRITE)
+    {
+        if(cmd_error->state == 0)
+        {
+            struct error_info info = {-1, 0};
+            info.err_length = cmd_error->error_length;
+
+            int result = send(client->data.socket, &info + cmd_error->error_size, sizeof(struct error_info) - cmd_error->error_size, 0);
+
+            if(result < 0)
+                return CLIENT_ERROR;
+
+            cmd_error->error_size += result;
+
+            if(cmd_error->error_size < sizeof(struct error_info))
+                return CLIENT_AGAIN;
+
+            cmd_error->error_size = 0;
+            cmd_error->state = 1;
+
+            return CLIENT_AGAIN;
+        }
+
+        int result = send(client->data.socket, cmd_error->buffer + cmd_error->error_size, cmd_error->error_length - cmd_error->error_size, 0);
+
+        if(result < 0)
+            return CLIENT_ERROR;
+
+        cmd_error->error_size += result;
+
+        if(cmd_error->error_size < cmd_error->error_length)
+            return CLIENT_AGAIN;
+
+        return CLIENT_SUCCESS;
+    }
+
+    return CLIENT_ERROR;
+}
+
 enum client_result handle_event(struct entry* client, enum client_events event)
 {
     switch(client->data.current_command.cmd_state)
@@ -109,6 +278,8 @@ enum client_result handle_event(struct entry* client, enum client_events event)
             return init_command(client);
         case COMMAND_READY:
             return execute_command(client, event);
+        case COMMAND_ERROR:
+            return handle_error(client, event);
         default:
             break;
     }
@@ -179,12 +350,12 @@ void* handle_client(void* args)
 
             LOG_MSG("Client connected");
 
-            struct entry client;
-            memset(&client, 0, sizeof(client));
+            struct entry client = { 0 };
 
             client.data.socket = socket_to_add;
             client.data.read = &read_fd;
             client.data.write = &write_fd;
+            strcpy(client.data.working_directory, CLIENTS_DIRECTORY);
             
             if(insert_client(&clients, client) == -1)
             {
@@ -378,6 +549,10 @@ void signal_handler(int sign_nr)
 
     pthread_mutex_destroy(&mutex);
 
+    LOG_MSG("Unmapping accounts file");
+
+    munmap(accounts.buffer, accounts.length);
+
 	if(sign_nr == SIGINT)
 	{
 		LOG_MSG("Closing all the clients...");
@@ -449,6 +624,14 @@ int setup_server()
 
 int run()
 {
+    accounts = get_accounts(ACCOUNTS_FILE);
+
+    if(accounts.length == 0 || accounts.buffer == NULL)
+    {
+        LOG_ERROR("Error at get_accounts");
+        return -1;
+    }
+
     if(signal(SIGINT, signal_handler) == SIG_ERR)
     {
     	LOG_ERROR("Eroare la signal");

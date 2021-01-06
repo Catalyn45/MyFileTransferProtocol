@@ -53,16 +53,42 @@ struct login_args
 	char password[30];
 };
 
-struct response
+
+struct error_type
 {
-	int ok;
+	int length;
+	char* buffer;
 };
+
+int is_ok(SOCKET socket)
+{
+	int ok = 0;
+
+	recv(socket, &ok, sizeof(ok), 0);
+
+	if(ok != 0)
+		return 0;
+
+	return 1;
+}
+
+int print_error(SOCKET socket)
+{
+	struct error_type error;
+
+	recv(socket, &error.length, sizeof(error.length), 0);
+	error.buffer = malloc(error.length);
+	recv(socket, error.buffer, error.length, 0);
+	printf("%s\n", error.buffer);
+	free(error.buffer);
+	return 0;
+}
 
 int login(SOCKET socket)
 {
-	struct response resp;
-
 	struct login_args credentials;
+
+	int ok;
 
 	do
 	{
@@ -91,28 +117,20 @@ int login(SOCKET socket)
 			return -1;
 		}
 
-		result = recv(socket, (char*)&resp, sizeof(resp), 0);
+		ok = is_ok(socket);
 
-		if(result == 0)
+		if(!ok)
 		{
-			LOG_MSG("Server closed connection");
-			return -1;
+			print_error(socket);
 		}
-
-		if(result < 0)
-		{
-			LOG_ERROR("Error at receiving response from server");
-			return -1;
-		}
-
-		if(resp.ok != 1)
-			printf("\n\nLogin failed\n\n");
 		else
+		{
 			printf("\n\nLogin success\n\n");
+		}
 
-	}while(resp.ok != 1);
+	}while(!ok);
 
-	return resp.ok;
+	return 0;
 }
 
 struct send_file_args
@@ -139,7 +157,15 @@ int receive_file(SOCKET server_socket)
     {
     	LOG_ERROR("Error at getting the file path");
     	return -1;
-    } 
+    }
+
+ 	char nume_fisier[256];
+
+ 	if(scanf("%s", nume_fisier) <= 0)
+ 	{
+ 		LOG_ERROR("Error at getting the file name");
+ 		return -1;
+ 	}
 
     int result = send(server_socket, (const char*)&cmd, sizeof(cmd), 0);
 
@@ -155,8 +181,13 @@ int receive_file(SOCKET server_socket)
     	return -1;
     }
 
-    struct file_info fi;
+	if(!is_ok(server_socket))
+	{
+		print_error(server_socket);
+		return 0;
+	}
 
+    struct file_info fi;
  	result = recv(server_socket, (char*)&fi, sizeof(fi), 0);
 
 	if(result == 0)
@@ -170,14 +201,6 @@ int receive_file(SOCKET server_socket)
     	LOG_ERROR("Error at receiving from server");
     	return -1;
     }
-
- 	char nume_fisier[256];
-
- 	if(scanf("%s", nume_fisier) <= 0)
- 	{
- 		LOG_ERROR("Error at getting the file name");
- 		return -1;
- 	}
 
 #ifdef __linux__
  	int fd = open(nume_fisier, O_RDWR | O_CREAT, S_IRWXU);
@@ -224,6 +247,13 @@ int receive_file(SOCKET server_socket)
     		last_bytes_remaining = fi.file_size;
     	}
 
+
+    	if(!is_ok(server_socket))
+    	{
+    		print_error(server_socket);
+    		return 0;
+    	}
+
     	int len = recv(server_socket, buffer, BUFFER_SIZE, 0);
 
     	if(len == 0)
@@ -264,13 +294,202 @@ close_file:
 
 }
 
+int send_ok(SOCKET socket)
+{
+	int ok = 0;
+
+	int result = send(socket, &ok, sizeof(int), 0);
+
+	return result;
+}
+
+int set_error(SOCKET socket, const char* msg)
+{
+	int ok = -1;
+	int result = send(socket, &ok, sizeof(int), 0);
+
+	if(result < 0)
+		return result;
+
+	unsigned int error_length = strlen(msg) + 1;
+
+	result = send(socket, &error_length, sizeof(error_length), 0);
+
+	if(result < 0)
+		return result;
+
+	result = send(socket, msg, error_length, 0);
+
+	return result;
+}
+
+int send_file(SOCKET socket)
+{
+	char buffer[BUFFER_SIZE];
+
+    struct send_file_args cmd;
+
+    cmd.cmd_index = 4;
+
+    if(scanf("%s", cmd.file_path) <= 0)
+    {
+    	LOG_ERROR("Error at getting the file path");
+    	return -1;
+    }
+
+ 	char nume_fisier[256];
+
+ 	if(scanf("%s", nume_fisier) <= 0)
+ 	{
+ 		LOG_ERROR("Error at getting the file name");
+ 		return -1;
+ 	}
+
+    int result = send(socket, (const char*)&cmd, sizeof(cmd), 0);
+
+    if(result == 0)
+    {
+    	LOG_MSG("Server closed");
+    	return -1;
+    }
+
+    if(result < 0)
+    {
+    	LOG_ERROR("Error at receiving from server");
+    	return -1;
+    }
+
+ 	if(!is_ok(socket))
+ 	{
+ 		print_error(socket);
+ 		return 0;
+ 	}
+
+    if(access(nume_fisier, F_OK ) != 0)
+    {
+    	LOG_MSG("File does not exists");
+        set_error(socket, "File does not exists");
+        return 0;
+    }
+
+ 	int fd = open(nume_fisier, O_RDONLY);
+
+ 	if(fd == -1)
+ 	{
+ 		set_error(socket, "Error at open file");
+ 		return -1;
+ 	}
+
+    struct file_info fi;
+
+    fi.file_type = 0;
+    fi.file_size = lseek(fd, 0L, SEEK_END);
+    lseek(fd, 0L, SEEK_SET);
+
+	if(send_ok(socket) < 0)
+	{
+		LOG_ERROR("Error at sending ok");
+		goto close_file;
+	}
+
+ 	result = send(socket, (char*)&fi, sizeof(fi), 0);
+
+ 	if(result < 0)
+ 	{
+ 		LOG_ERROR("Error at sending file info");
+ 		goto close_file;
+ 	}
+
+ 	while(fi.file_size > 0)
+ 	{
+ 		int len = read(fd, buffer, BUFFER_SIZE);
+
+ 		if(len < 0)
+ 		{
+ 			set_error(socket, "Error at reading from file");
+ 			goto close_file;
+ 		}
+
+ 		if(send_ok(socket) < 0)
+ 		{
+ 			LOG_ERROR("Error at sending ok");
+ 			goto close_file;
+ 		}
+
+ 		result = send(socket, buffer, len, 0);
+
+ 		if(result < 0)
+ 		{
+ 			LOG_ERROR("Error at sending data from file");
+ 			goto close_file;
+ 		}
+
+ 		fi.file_size -= result;
+ 	}
+ 	
+ 	printf("Done\n");
+ 	close(fd);
+ 	return 0;
+
+close_file:
+	close(fd);
+	return -1;
+}
+
+int create_account(SOCKET socket)
+{
+	struct login_args credentials;
+
+	int ok;
+
+	printf("username: ");
+	if(scanf("%s", credentials.username) <= 0)
+	{
+		LOG_ERROR("Error at getting the username");
+		return -1;
+	}
+	
+	printf("\npassword: ");
+
+	if(scanf("%s", credentials.password) <= 0)
+	{
+		LOG_ERROR("Error at getting the password");
+		return -1;
+	}
+
+	credentials.cmd_index = 3;
+
+	int result = send(socket, (const char*)&credentials, sizeof(credentials), 0);
+
+	if(result == -1)
+	{
+		LOG_ERROR("Error at sending credentials");
+		return -1;
+	}
+
+	ok = is_ok(socket);
+
+	if(!ok)
+	{
+		print_error(socket);
+	}
+	else
+	{
+		printf("\n\nAccount created with success\n\n");
+	}
+
+	return 0;
+}
+
 typedef int (*server_func)(SOCKET socket);
 
 server_func functions[] =  
 {
 	NULL,
 	login,
-	receive_file
+	receive_file,
+	create_account,
+	send_file
 };
 
 unsigned int functions_number = LENGTH_OF(functions);
@@ -291,12 +510,14 @@ int parse_command(const char* command)
 	static const char* commands[] = {
 		NULL,
 		"login",
-		"get_file"
+		"get_file",
+		"create_account",
+		"send_file"
 	};
 
 	for(unsigned int i = 1; i < LENGTH_OF(commands); i++)
 	{
-		if(strcmp(command, commands[i]) == 0)
+		if(strstr(command, commands[i]) != 0)
 			return i;
 	}
 
