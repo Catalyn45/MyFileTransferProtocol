@@ -142,18 +142,6 @@ enum client_result init_command(struct entry* client)
     if(cmd == NULL)
         return CLIENT_ERROR;
 
-    if(cmd->index >= max_cmds)
-    {
-        set_error(client, "Invalid command index");
-        return CLIENT_WANT_WRITE;
-    }
-
-    if (client->data.client_security < commands_list[cmd->index].function_security)
-    {
-        set_error(client, "You do not have permission to use that command");
-        return CLIENT_WANT_WRITE;
-    }
-
     if(commands_list[cmd->index].new == NULL)
         return CLIENT_WANT_READ;
 
@@ -191,7 +179,7 @@ enum client_result handle_error(struct entry* client, enum client_events event)
     {
         if(cmd_error->state == 0)
         {
-            int result = recv(client->data.socket, &cmd_error->error_length + cmd_error->error_size, sizeof(int) - cmd_error->error_size, 0);
+            int result = recv(client->data.socket, (char*)&cmd_error->error_length + cmd_error->error_size, sizeof(int) - cmd_error->error_size, 0);
 
             if(result == 0)
                 return CLIENT_CLOSED;
@@ -242,7 +230,7 @@ enum client_result handle_error(struct entry* client, enum client_events event)
             struct error_info info = {-1, 0};
             info.err_length = cmd_error->error_length;
 
-            int result = send(client->data.socket, &info + cmd_error->error_size, sizeof(struct error_info) - cmd_error->error_size, 0);
+            int result = send(client->data.socket, (const char*)&info + cmd_error->error_size, sizeof(struct error_info) - cmd_error->error_size, 0);
 
             if(result < 0)
                 return CLIENT_ERROR;
@@ -329,9 +317,7 @@ void* handle_client(void* args)
         if(count < 0)
         {
             LOG_ERROR("Error at select, closing thread");
-            exit_thread(&clients, main_thread.index);
-            pthread_detach(workers[main_thread.index].thread_handle);
-            return NULL;
+            goto detach_thr;
         }
 
         if FD_ISSET(main_thread_socket, &copy_read_fd)
@@ -341,16 +327,11 @@ void* handle_client(void* args)
             if(recv(main_thread_socket, (char*)&socket_to_add, sizeof(int), 0) <= 0)
             {
                 LOG_ERROR("Error at reciving new socket from mainthread");
-                exit_thread(&clients, main_thread.index);
-                pthread_detach(workers[main_thread.index].thread_handle);
-                return NULL;
+                goto detach_thr;
             }
 
             if(socket_to_add == -1)
-            {
-                exit_thread(&clients, main_thread.index);
-                return NULL;
-            }
+                goto exit_thr;
 
             LOG_MSG("Client connected");
 
@@ -368,9 +349,7 @@ void* handle_client(void* args)
             if(response < 0)
             {
                 LOG_ERROR("Error at getting peer name");
-                exit_thread(&clients, main_thread.index);
-                pthread_detach(workers[main_thread.index].thread_handle);
-                return NULL;
+                goto detach_thr;
             }
 
             strcpy(client.data.ip, inet_ntoa(address.sin_addr));
@@ -378,9 +357,7 @@ void* handle_client(void* args)
             if(insert_client(&clients, client) == -1)
             {
                 LOG_ERROR("Error at putting the client in list");
-                exit_thread(&clients, main_thread.index);
-                pthread_detach(workers[main_thread.index].thread_handle);
-                return NULL;
+                goto detach_thr;
             }
 
             LOG_MSG(client.data.ip);
@@ -418,15 +395,17 @@ void* handle_client(void* args)
             if((result == CLIENT_CLOSED || result == CLIENT_ERROR) && SLIST_EMPTY(&clients))
             {
                 LOG_MSG("no clients, closing the thread");
-                exit_thread(&clients, main_thread.index);
-                pthread_detach(workers[main_thread.index].thread_handle);
-                return NULL;
+                goto detach_thr;
             }
 
             count--;
         }
     }
 
+detach_thr:
+    pthread_detach(workers[main_thread.index].thread_handle);
+exit_thr:
+    exit_thread(&clients, main_thread.index);
     return NULL;
 }
 
@@ -454,7 +433,7 @@ void handle_result(struct entry* client, struct slisthead* clients, int index, e
             clients_connected[index]--;
             pthread_mutex_unlock(&mutex);
 
-            LOG_ERROR("Error at client, client closeed");
+            LOG_ERROR("Error at client, client closed");
         break;
 
         case CLIENT_CLOSED:

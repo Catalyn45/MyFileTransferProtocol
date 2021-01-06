@@ -3,6 +3,9 @@ CC = gcc
 CFLAGS_WARNINGS = \
 	-pedantic -Wall -Wextra -Werror -Winline
 
+LIBS = \
+       -lmbedtls -lmbedcrypto
+
 client: main.o client_commands.o types.h
 	$(CC) main.o client_commands.o -o client $(LIBS)
 

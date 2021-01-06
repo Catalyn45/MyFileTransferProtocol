@@ -1,6 +1,6 @@
 #ifndef TYPES_H
 #define TYPES_H
-
+#define _CRT_SECURE_NO_WARNINGS
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -21,14 +21,15 @@
 #include <sys/queue.h>
 #include <dirent.h>
 #include <arpa/inet.h>
+#include <sys/file.h>
 #elif _WIN32
 #define SOCK_ERROR INVALID_SOCKET
 #define off_t long long
 #include <windows.h>
-#include <winsock2.h>
-#include <Ws2tcpip.h>
 #include <Shlwapi.h>
-#define size_t unsigned long long
+#pragma comment (lib, "Ws2_32.lib")
+#pragma comment (lib, "Shlwapi.lib")
+typedef SSIZE_T ssize_t;
 #endif 
 
 typedef int (*server_func)(SOCKET socket, int index);
@@ -38,7 +39,7 @@ typedef int (*server_func)(SOCKET socket, int index);
     printf("%s\n%s\n%d\n\n", message, strerror(errno), __LINE__)
 #elif _WIN32
 #define LOG_ERROR(message) \
-    printf("%s\nError nr: %ld\n\n", message, GetLastError())
+    printf("%s\nError nr: %ld\n%d\n\n", message, GetLastError(), __LINE__)
 #endif
 
 #define LOG_MSG(message) \

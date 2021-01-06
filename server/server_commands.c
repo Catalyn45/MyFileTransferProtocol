@@ -4,6 +4,7 @@
 
 struct client_function commands_list[] = {
 	{SECURITY_ALL, get_command_new, get_command, NULL}, // always needs to be first
+    {SECURITY_ALL, get_hint_new, get_hint, NULL},
     {SECURITY_ALL, create_account_new, create_account, NULL},
 	{SECURITY_ALL, login_new, login, NULL},
     {SECURITY_CONNECTED, send_file_new, send_file,  send_file_free},
@@ -21,7 +22,7 @@ int get_ok(struct entry* client)
 	if(cmd->ok_finished == 1)
 		return 1;
 
-	int res = recv(client->data.socket, &cmd->ok + cmd->ok_size, sizeof(cmd->ok) - cmd->ok_size, 0);
+	int res = recv(client->data.socket, (char*)&cmd->ok + cmd->ok_size, sizeof(cmd->ok) - cmd->ok_size, 0);
 
 	if(res <= 0)
 		return res;
@@ -49,7 +50,7 @@ int send_ok(struct entry* client)
 
 	cmd->ok = 0;
 
-	int res = send(client->data.socket, &cmd->ok + cmd->ok_size, sizeof(cmd->ok) - cmd->ok_size, 0);
+	int res = send(client->data.socket, (const char*)&cmd->ok + cmd->ok_size, sizeof(cmd->ok) - cmd->ok_size, 0);
 
 	if(res < 0)
 		return res;
@@ -89,7 +90,7 @@ enum client_result get_command(struct entry* client, enum client_events event)
 
 	if(event == EVENT_READ)
 	{
-		int len = recv(client->data.socket, (&args->command_index) + args->buf_size, sizeof(int) - args->buf_size, 0);
+		int len = recv(client->data.socket, (char*)&args->command_index + args->buf_size, sizeof(int) - args->buf_size, 0);
 
 		if(len == -1)
 			return CLIENT_ERROR;
@@ -102,10 +103,36 @@ enum client_result get_command(struct entry* client, enum client_events event)
 		if(args->buf_size < sizeof(int))
 			return CLIENT_AGAIN;
 
-		return CLIENT_SUCCESS;
-	}
+        if(args->command_index >= (int)max_cmds)
+        {
+            set_error(client, "Invalid command index");
+            args->command_index = 0;
+            return CLIENT_WANT_WRITE;
+        }
 
-	return CLIENT_WANT_READ;
+        if (client->data.client_security < commands_list[args->command_index].function_security)
+        {
+            set_error(client, "You do not have permission to use that command");
+            args->command_index = 0;
+        }
+
+		return CLIENT_WANT_WRITE;
+	}
+    else if(event == EVENT_WRITE)
+    {
+        struct command* cmd = &client->data.current_command;
+
+        if(!cmd->ok_finished)
+        {
+            if(send_ok(client) < 0)
+                return CLIENT_ERROR;
+            return CLIENT_AGAIN;
+        }
+
+        return CLIENT_SUCCESS;
+    }
+
+	return CLIENT_ERROR;
 }
 
 struct data_type
@@ -217,7 +244,7 @@ enum client_result send_file(struct entry* client, enum client_events event)
     		return CLIENT_AGAIN;
     	}
 
-        int result = send(client->data.socket, &args->finfo + args->buf_size, sizeof(struct file_info) - args->buf_size, 0);
+        int result = send(client->data.socket, (const char*)&args->finfo + args->buf_size, sizeof(struct file_info) - args->buf_size, 0);
 
         if(result == -1)
         {
@@ -266,7 +293,7 @@ enum client_result send_file(struct entry* client, enum client_events event)
     		return CLIENT_AGAIN;
     	}
 
-        int len = send(client->data.socket, &args->tinfo.data + args->buf_size, (args->tinfo.data.read_len + sizeof(int)) - args->buf_size, 0);
+        int len = send(client->data.socket, (const char*)&args->tinfo.data + args->buf_size, (args->tinfo.data.read_len + sizeof(int)) - args->buf_size, 0);
 
         if(len == -1)
         {
@@ -414,7 +441,7 @@ enum client_result get_file(struct entry* client, enum client_events event)
     		return CLIENT_AGAIN;
     	}
 
-        int result = recv(client->data.socket, &args->finfo + args->buf_size, sizeof(struct file_info) - args->buf_size, 0);
+        int result = recv(client->data.socket, (char*)&args->finfo + args->buf_size, sizeof(struct file_info) - args->buf_size, 0);
 
         if(result < 0)
         {
@@ -465,7 +492,7 @@ enum client_result get_file(struct entry* client, enum client_events event)
     		return CLIENT_AGAIN;
     	}
 
-        int len = recv(client->data.socket, &args->tinfo.data.read_len + args->buf_size, sizeof(args->tinfo.data.read_len) - args->buf_size, 0);
+        int len = recv(client->data.socket, (char*)&args->tinfo.data.read_len + args->buf_size, sizeof(args->tinfo.data.read_len) - args->buf_size, 0);
 
         if(len < 0)
         {
@@ -570,7 +597,7 @@ static int have_rights(const char* ip, const char* line)
 
 	for(int i = 0; i < 3; i++)
 	{
-		begin = strchr(begin, '/');
+		begin = strchr(begin, ' ');
 
 		if(begin == NULL)
 			return -1;
@@ -587,7 +614,7 @@ static int have_rights(const char* ip, const char* line)
 
 	for(int i = 0; i < 2; i++)
 	{
-		begin = strchr(begin, '/');
+		begin = strchr(begin, ' ');
 
 		if(begin == NULL)
 			return -1;
@@ -632,9 +659,9 @@ static int account_exists(struct entry* client, const char* username, const char
 	}
 
 	strcat(pattern, username);
-	strcat(pattern, "/");
+	strcat(pattern, " ");
 	strcat(pattern, password);
-	strcat(pattern, "/");
+	strcat(pattern, " ");
 
 	if(strlen(pattern) != patter_len)
 	{
@@ -690,10 +717,41 @@ static int account_exists(struct entry* client, const char* username, const char
 	return 0;
 }
 
+
+static int generate_key(unsigned char* string, size_t length, unsigned char out_key[32])
+{
+    unsigned char output[16];
+    if(mbedtls_md5_ret(string, length, output) != 0)
+        return -1;
+
+    if(mbedtls_sha256_ret(output, 16, out_key, 0) != 0)
+        return -1;
+
+    return 0;
+}
+
+
+static void crypt_msg(const unsigned char* key, unsigned char* message, size_t message_len)
+{
+    for(size_t i = 0; i < message_len; i++)
+    {
+        for(size_t j = 0; j < 32; j++)
+        {
+            message[i] = message[i] ^ key[j];
+        }
+    }
+}
+
+struct login_data
+{
+    char username[30];
+    char password[44];
+};
+
 struct user_pass
 {
-	char username[30];
-	char password[30];
+    int crypted;
+    struct login_data data;
 };
 
 struct login_args
@@ -718,7 +776,7 @@ enum client_result login(struct entry* client, enum client_events event)
 
 	if(event == EVENT_READ)
 	{
-		int len = recv(client->data.socket, &args->credentials + args->buf_size, sizeof(args->credentials) - args->buf_size, 0);
+		int len = recv(client->data.socket, (char*)&args->credentials + args->buf_size, sizeof(args->credentials) - args->buf_size, 0);
 
 		if(len == 0)
 			return CLIENT_CLOSED;
@@ -730,7 +788,18 @@ enum client_result login(struct entry* client, enum client_events event)
 
 		if(args->buf_size == sizeof(struct user_pass))
 		{
-			int result = account_exists(client, args->credentials.username, args->credentials.password);
+            if(args->credentials.crypted)
+            {
+                if(!client->data.have_crypt_key)
+                {
+                    set_error(client, "Can't decrypt data");
+                    return CLIENT_WANT_WRITE;
+                }
+
+                crypt_msg(client->data.crypt_key, (unsigned char*)&args->credentials.data, sizeof(args->credentials.data));
+            }
+
+			int result = account_exists(client, args->credentials.data.username, args->credentials.data.password);
 
 			if(result == -1)
 			{
@@ -744,11 +813,11 @@ enum client_result login(struct entry* client, enum client_events event)
 			{
 				strcpy(client->data.working_directory, CLIENTS_DIRECTORY);
 				strcat(client->data.working_directory, "/");
-				strcat(client->data.working_directory, args->credentials.username);
+				strcat(client->data.working_directory, args->credentials.data.username);
 
 				free(client->data.username);
 
-				client->data.username = strdup(args->credentials.username);
+				client->data.username = strdup(args->credentials.data.username);
 
 				if(client->data.username == NULL)
 					set_error(client, "Some error occured");
@@ -828,11 +897,11 @@ static int add_account(const char* username, const char* password, const char* i
 	}
 
 	strcat(line, username);
-	strcat(line, "/");
+	strcat(line, " ");
 	strcat(line, password);
-	strcat(line, "/");
+	strcat(line, " ");
 	strcat(line, ip);
-	strcat(line, "/");
+	strcat(line, " ");
 
 	if(restricted)
 	{
@@ -843,7 +912,7 @@ static int add_account(const char* username, const char* password, const char* i
 		strcat(line, "wl");
 	}
 
-	strcat(line, "/n\n");
+	strcat(line, " n\n");
 
 	if(strlen(line) != line_length)
 	{
@@ -883,16 +952,23 @@ free_line:
 	return -1;
 }
 
+struct create_account_data
+{
+    int restricted;
+    char username[30];
+    char password[44];
+};
+
 struct create_account_user_pass
 {
-	int restricted;
-	char username[30];
-	char password[30];
+    int crypted;
+    struct create_account_data data;
 };
 
 struct create_account_args
 {
 	int buf_size;
+    int state;
 	struct create_account_user_pass credentials;
 };
 
@@ -912,7 +988,7 @@ enum client_result create_account(struct entry* client, enum client_events event
 
 	if(event == EVENT_READ)
 	{
-		int len = recv(client->data.socket, &args->credentials + args->buf_size, sizeof(args->credentials) - args->buf_size, 0);
+		int len = recv(client->data.socket, (char*)&args->credentials + args->buf_size, sizeof(args->credentials) - args->buf_size, 0);
 
 		if(len == 0)
 			return CLIENT_CLOSED;
@@ -924,54 +1000,67 @@ enum client_result create_account(struct entry* client, enum client_events event
 
 		if(args->buf_size == sizeof(struct create_account_user_pass))
 		{
-			pthread_mutex_lock(&accounts_mutex);
+	        args->buf_size = 0;
 
-			int response = username_exists(args->credentials.username);
+            if(args->credentials.crypted)
+            {
+                if(!client->data.have_crypt_key)
+                {
+                    set_error(client, "Can't decrypt data");
+                    return CLIENT_WANT_WRITE;
+                }
 
-			if(response == -1)
-			{
-				pthread_mutex_unlock(&accounts_mutex);
-				set_error(client, "Some error occured, try again");
-				return CLIENT_WANT_WRITE;
-			}
+                crypt_msg(client->data.crypt_key, (unsigned char*)&args->credentials.data, sizeof(args->credentials.data));
+            }
 
-			if(response)
-			{
-				pthread_mutex_unlock(&accounts_mutex);
-				set_error(client, "Username already exists");
-				return CLIENT_WANT_WRITE;
-			}
+            pthread_mutex_lock(&accounts_mutex);
 
-			munmap(accounts.buffer, accounts.length);
+            int response = username_exists(args->credentials.data.username);
 
-			if(add_account(args->credentials.username, args->credentials.password, client->data.ip, args->credentials.restricted) != 0)
-			{
-				pthread_mutex_unlock(&accounts_mutex);
-				set_error(client, "Some error occured, try again");
-				return CLIENT_WANT_WRITE;
-			}
+            if(response == -1)
+            {
+                pthread_mutex_unlock(&accounts_mutex);
+                set_error(client, "Some error occured, try again");
+                return CLIENT_WANT_WRITE;
+            }
 
-			accounts = get_accounts(ACCOUNTS_FILE);
-			pthread_mutex_unlock(&accounts_mutex);
+            if(response)
+            {
+                pthread_mutex_unlock(&accounts_mutex);
+                set_error(client, "Username already exists");
+                return CLIENT_WANT_WRITE;
+            }
 
-			if(accounts.buffer == NULL || accounts.length == 0)
-				set_error(client, "Some error occured, try again");
+            munmap(accounts.buffer, accounts.length);
 
-			args->buf_size = 0;
+            if(add_account(args->credentials.data.username, args->credentials.data.password, client->data.ip, args->credentials.data.restricted) != 0)
+            {
+                pthread_mutex_unlock(&accounts_mutex);
+                set_error(client, "Some error occured, try again");
+                return CLIENT_WANT_WRITE;
+            }
 
-			char buffer[MAX_PATH] = CLIENTS_DIRECTORY;
-			strcat(buffer, "/");
-			strcat(buffer, args->credentials.username);
+            accounts = get_accounts(ACCOUNTS_FILE);
+            pthread_mutex_unlock(&accounts_mutex);
 
-			struct stat status = {0};
+            if(accounts.buffer == NULL || accounts.length == 0)
+                set_error(client, "Some error occured, try again");
 
-			if (stat(buffer, &status) == -1)
-			{
-				mkdir(buffer, 0700);
-			}
+            char buffer[MAX_PATH] = CLIENTS_DIRECTORY;
+            strcat(buffer, "/");
+            strcat(buffer, args->credentials.data.username);
 
-			return CLIENT_WANT_WRITE;
+            struct stat status = {0};
+
+            if (stat(buffer, &status) == -1)
+            {
+                mkdir(buffer, 0700);
+            }
+
+            return CLIENT_WANT_WRITE;
 		}
+
+        return CLIENT_AGAIN;
 	}
 	else if(event == EVENT_WRITE)
 	{
@@ -1114,7 +1203,7 @@ enum client_result ls(struct entry* client, enum client_events event)
     		return CLIENT_AGAIN;
     	}
 
-    	int result = send(client->data.socket, &args->data.length + args->data.sended, sizeof(args->data.length) - args->data.sended, 0);
+    	int result = send(client->data.socket, (const char*)&args->data.length + args->data.sended, sizeof(args->data.length) - args->data.sended, 0);
 
     	if(result < 0)
     		return CLIENT_ERROR;
@@ -1275,4 +1364,73 @@ enum client_result cd(struct entry* client, enum client_events event)
 	}
 
 	return CLIENT_ERROR;
+}
+
+struct key_hint
+{
+    unsigned char buffer[30];
+    size_t length;
+};
+
+struct get_hint_args
+{
+    size_t buf_size;
+    struct key_hint hint;
+};
+
+int get_hint_new(struct entry* client)
+{
+    client->data.args = calloc(1, sizeof(struct get_hint_args));
+
+    if(client->data.args == NULL)
+        return -1;
+
+    return 0;
+}
+
+enum client_result get_hint(struct entry* client, enum client_events event)
+{
+    if(event == EVENT_READ)
+    {
+        struct get_hint_args* args = client->data.args;
+
+        int result = recv(client->data.socket, (char*)&args->hint + args->buf_size, sizeof(args->hint) - args->buf_size, 0);
+
+        if(result < 0)
+            return CLIENT_ERROR;
+
+        if(result == 0)
+            return CLIENT_CLOSED;
+
+        args->buf_size += result;
+
+        if(args->buf_size == sizeof(args->hint))
+        {
+            int result = generate_key(args->hint.buffer, args->hint.length, client->data.crypt_key);
+
+            if(result == -1)
+                set_error(client, "Error at generating key");
+            else
+                client->data.have_crypt_key = 1;
+
+            return CLIENT_WANT_WRITE;
+        }
+
+        return CLIENT_AGAIN;
+    }
+    else if(event == EVENT_WRITE)
+    {
+        struct command* cmd = &client->data.current_command;
+
+        if(!cmd->ok_finished)
+        {
+            if(send_ok(client) < 0)
+                return CLIENT_ERROR;
+            return CLIENT_AGAIN;
+        }
+
+        return CLIENT_SUCCESS;
+    }
+
+    return CLIENT_ERROR;
 }

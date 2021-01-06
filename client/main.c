@@ -1,5 +1,4 @@
 #include "types.h"
-
 #define IP "127.0.0.1"
 #define PORT 8089
 #define MAX_IP_LEN 256
@@ -122,12 +121,14 @@ int parse_command(const char* command)
 {
 	static const char* commands[] = {
 		NULL,
+		"send_hint",
 		"create_account",
 		"login",
 		"get_file",
 		"send_file",
 		"ls",
-		"cd"
+		"cd",
+		"help"
 	};
 
 	for(unsigned int i = 1; i < LENGTH_OF(commands); i++)
@@ -138,6 +139,8 @@ int parse_command(const char* command)
 
 	return -1;
 }
+
+extern int help(SOCKET, int);
 
 int main(int argc, char* argv[])
 {
@@ -155,12 +158,12 @@ int main(int argc, char* argv[])
 		strcpy(ip, "127.0.0.1");
 	}
 
-	printf("%s\n", ip);
-
 	if(argc > 2)
 	{
 		port = (unsigned short)atoi(argv[2]);
 	}
+
+	LOG_MSG("The ip of the server needs to be first argument, and the port second");
 
 	#ifdef _WIN32
 	WSADATA wsaData;
@@ -207,6 +210,8 @@ int main(int argc, char* argv[])
 
     char current_command[256];
 
+    (void)help(0, 0);
+
     while(1)
     {
     	printf("Insert command: ");
@@ -233,8 +238,6 @@ int main(int argc, char* argv[])
 	    	LOG_MSG("Error at executing the command");
 	    	goto close_client;
 	    }
-
-	    getchar();
 	}
 
     closesocket(server_socket);

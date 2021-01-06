@@ -10,6 +10,9 @@
 extern struct mapped_file accounts;
 pthread_mutex_t accounts_mutex;
 
+int get_hint_new(struct entry* client);
+enum client_result get_hint(struct entry* client, enum client_events event);
+
 int send_file_new(struct entry* client);
 enum client_result send_file(struct entry* client, enum client_events event);
 void send_file_free(struct entry* client);

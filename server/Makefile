@@ -3,7 +3,7 @@ CC = gcc
 CFLAGS_WARNINGS = \
 	-pedantic -Wall -Wextra -Werror -Winline
 
-LIBS = -lpthread
+LIBS = -lpthread -lmbedtls -lmbedcrypto
 
 ftp_server: main.o server.o server_commands.o types.h
 	$(CC) main.o server.o server_commands.o -o ftp_server $(LIBS)
